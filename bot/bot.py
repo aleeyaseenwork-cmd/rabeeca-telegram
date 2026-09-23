@@ -12,6 +12,7 @@ import os
 import sys
 import logging
 
+import stripe
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -29,6 +30,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5000")
+
+stripe.api_key = STRIPE_SECRET_KEY
 
 dal.init_db()
 
@@ -80,26 +83,61 @@ async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     checkout_link = build_checkout_link(user.id, chosen, provider)
 
+    if checkout_link is None:
+        await query.edit_message_text(
+            "Sorry, something went wrong setting up payment. Please try again in a moment or contact support."
+        )
+        return
+
+    buy_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Buy Now", url=checkout_link)]])
+
     await query.edit_message_text(
         f"You selected: {chosen['text']} ({chosen['price']})\n\n"
-        f"Complete payment here:\n{checkout_link}\n\n"
-        "You'll be added to the group automatically once payment is confirmed."
+        "Tap the button below to complete payment.\n\n"
+        "You'll be added to the group automatically once payment is confirmed.",
+        reply_markup=buy_keyboard,
     )
 
 
 def build_checkout_link(telegram_user_id, plan, provider):
     """
-    Placeholder link builder. Wire this up to the real Stripe/PayPal/CCBill
-    SDK — see README "Payments setup" section for the exact snippet.
-    The important part: pass telegram_user_id as client_reference_id so the
-    webhook in app/app.py knows who to activate on success.
+    Builds the real payment link for the chosen plan. Stripe is fully wired
+    up (test or live key, whichever is in .env). PayPal/CCBill return a
+    placeholder until you wire up their SDKs the same way.
+    client_reference_id carries the Telegram user id so the webhook in
+    app/app.py knows who to activate once payment succeeds.
     """
     if provider == "stripe":
-        # Real version creates a stripe.checkout.Session and returns session.url
-        return f"{DASHBOARD_URL}/checkout/stripe?ref={telegram_user_id}&price={plan['price']}"
+        try:
+            is_subscription = plan["duration_type"] in ("weekly", "monthly")
+            line_item = {
+                "price_data": {
+                    "currency": "usd",
+                    "product_data": {"name": plan["text"]},
+                    "unit_amount": int(round(plan["price"] * 100)),
+                },
+                "quantity": 1,
+            }
+            if is_subscription:
+                interval = "week" if plan["duration_type"] == "weekly" else "month"
+                line_item["price_data"]["recurring"] = {"interval": interval}
+
+            session = stripe.checkout.Session.create(
+                mode="subscription" if is_subscription else "payment",
+                line_items=[line_item],
+                client_reference_id=str(telegram_user_id),
+                success_url=f"{DASHBOARD_URL}/checkout/success",
+                cancel_url=f"{DASHBOARD_URL}/checkout/cancel",
+            )
+            return session.url
+        except Exception as e:
+            log.error("Stripe checkout session failed: %s", e)
+            return None
     elif provider == "paypal":
+        # TODO: wire up PayPal SDK the same way once ready
         return f"{DASHBOARD_URL}/checkout/paypal?ref={telegram_user_id}&price={plan['price']}"
     else:
+        # TODO: wire up CCBill the same way once ready
         return f"{DASHBOARD_URL}/checkout/ccbill?ref={telegram_user_id}&price={plan['price']}"
 
 

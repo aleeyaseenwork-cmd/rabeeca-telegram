@@ -211,6 +211,18 @@ def api_dev_table(table):
         return jsonify({"error": "invalid table"}), 400
 
 
+@app.route("/checkout/success")
+def checkout_success():
+    return "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>" \
+           "<h2>Payment received</h2><p>You can close this tab and return to Telegram.</p></body></html>"
+
+
+@app.route("/checkout/cancel")
+def checkout_cancel():
+    return "<html><body style='font-family:sans-serif;text-align:center;padding:60px'>" \
+           "<h2>Payment cancelled</h2><p>No charge was made. Go back to Telegram and /start again to retry.</p></body></html>"
+
+
 # -------------------------------------------------- stripe webhook (stub) -
 
 @app.route("/webhook/stripe", methods=["POST"])
