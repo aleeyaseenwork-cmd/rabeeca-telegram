@@ -95,18 +95,19 @@ This gives you a second, independent, human-readable copy of your data that upda
 1. Go to [console.cloud.google.com](https://console.cloud.google.com), create a project (or use an existing one).
 2. Enable the **Google Sheets API** for that project (search for it in the API library, click Enable).
 3. Go to **IAM & Admin → Service Accounts → Create Service Account**. Give it any name, no special roles needed.
-4. Open the service account, go to **Keys → Add Key → Create new key → JSON**. This downloads a `credentials.json` file, place it in the root of `telegram-sub-bot/` (next to `.env`).
-5. Create a new Google Sheet (or use an existing one). Open it, click **Share**, and share it with the service account's email address (it looks like `something@your-project.iam.gserviceaccount.com`, found inside `credentials.json`), give it **Editor** access.
-6. Copy the spreadsheet ID from its URL: `https://docs.google.com/spreadsheets/d/THIS_PART_IS_THE_ID/edit`
+4. Open the service account, go to **Keys → Add Key → Create new key → JSON**. This downloads a JSON key file.
+5. Rename that file to `google_service_account.json` and place it inside the `database/` folder (next to `db.py`). This project already ships with one filled in with the credentials given earlier, replace it with your own if you ever rotate keys.
+6. Create a new Google Sheet (or use an existing one). Open it, click **Share**, and share it with the service account's email address (the `client_email` field inside the JSON file), give it **Editor** access.
+7. Copy the spreadsheet ID from its URL: `https://docs.google.com/spreadsheets/d/THIS_PART_IS_THE_ID/edit`
 
-**Then in `.env`:**
+**Then in `.env`, only one line is needed:**
 ```
-GOOGLE_SHEETS_ENABLED=1
-GOOGLE_SHEETS_CREDENTIALS_FILE=credentials.json
-GOOGLE_SHEETS_SPREADSHEET_ID=the-id-you-copied
+GOOGLE_SHEET_ID=the-id-you-copied
 ```
 
-That's it. The dashboard and bot will now auto-create three tabs the first time each is written to — **Subscribers**, **Payments**, **Panels** — and keep every row updated live. If Sheets is briefly unreachable, the real database write still goes through normally; only the mirror step is skipped and logged, nothing user-facing breaks.
+Credentials are never put in `.env`, they stay in the JSON file. This matters because private keys are multi-line and most `.env` parsers mangle the embedded `\n` characters, a real JSON file avoids that problem entirely. Mirroring turns on automatically once `GOOGLE_SHEET_ID` is set and the credentials file exists; set `GOOGLE_SHEETS_ENABLED=0` to switch it off without deleting anything.
+
+The dashboard and bot will auto-create three tabs the first time each is written to — **Subscribers**, **Payments**, **Panels** — and keep every row updated live. If Sheets is briefly unreachable, the real database write still goes through normally; only the mirror step is skipped and logged, nothing user-facing breaks.
 
 **Why this matters for your redeploy worry:** stats and subscriber counts in this dashboard are always read live from the database itself, nothing is cached in the bot's memory, so redeploying or restarting the bot can never make counts show as zero. The Sheets mirror is an extra safety net on top of that, not something the app depends on to function.
 
@@ -325,7 +326,8 @@ telegram-sub-bot/
 │   ├── dal.py            # picks sqlite or mongodb, mirrors writes to Sheets
 │   ├── db.py              # SQLite backend
 │   ├── db_mongo.py        # MongoDB backend
-│   └── sheets_sync.py     # live Google Sheets mirror (optional)
+│   ├── sheets_sync.py     # live Google Sheets mirror (optional)
+│   └── google_service_account.json  # Sheets credentials (real file, not .env)
 ├── requirements.txt
 ├── .env.example
 └── README.md

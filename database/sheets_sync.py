@@ -8,12 +8,17 @@ This is best-effort: if Sheets is unreachable or misconfigured, writes
 to the real database still succeed, and a warning is logged. The
 dashboard/bot never depend on Sheets being up.
 
-Requires in .env:
-  GOOGLE_SHEETS_ENABLED=1
-  GOOGLE_SHEETS_CREDENTIALS_FILE=credentials.json   (service account key)
-  GOOGLE_SHEETS_SPREADSHEET_ID=your-sheet-id
+Credentials live in database/google_service_account.json (a real file,
+not an .env line) because service account private keys are multi-line
+and some .env loaders mangle the embedded \n characters. Only the
+sheet ID needs to be in .env:
+  GOOGLE_SHEET_ID=your-sheet-id
+
+Sheets mirroring turns on automatically once GOOGLE_SHEET_ID is set and
+the credentials file exists. Set GOOGLE_SHEETS_ENABLED=0 to force it off.
 """
 import os
+import json
 import logging
 
 log = logging.getLogger(__name__)
@@ -21,6 +26,8 @@ log = logging.getLogger(__name__)
 _client = None
 _spreadsheet = None
 _worksheet_cache = {}
+
+CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "google_service_account.json")
 
 SUBSCRIBER_HEADERS = [
     "id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
@@ -35,7 +42,9 @@ PANEL_HEADERS = ["id", "name", "message_text", "buttons", "active", "created_at"
 
 
 def is_enabled():
-    return os.environ.get("GOOGLE_SHEETS_ENABLED", "0") == "1"
+    if os.environ.get("GOOGLE_SHEETS_ENABLED", "1") == "0":
+        return False
+    return bool(os.environ.get("GOOGLE_SHEET_ID")) and os.path.exists(CREDENTIALS_PATH)
 
 
 def _get_spreadsheet():
@@ -46,13 +55,14 @@ def _get_spreadsheet():
     import gspread
     from google.oauth2.service_account import Credentials
 
-    creds_file = os.environ.get("GOOGLE_SHEETS_CREDENTIALS_FILE", "credentials.json")
-    sheet_id = os.environ.get("GOOGLE_SHEETS_SPREADSHEET_ID", "")
+    sheet_id = os.environ.get("GOOGLE_SHEET_ID", "")
     if not sheet_id:
-        raise RuntimeError("GOOGLE_SHEETS_SPREADSHEET_ID is not set")
+        raise RuntimeError("GOOGLE_SHEET_ID is not set in .env")
+    if not os.path.exists(CREDENTIALS_PATH):
+        raise RuntimeError(f"Credentials file not found at {CREDENTIALS_PATH}")
 
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    creds = Credentials.from_service_account_file(creds_file, scopes=scopes)
+    creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=scopes)
     _client = gspread.authorize(creds)
     _spreadsheet = _client.open_by_key(sheet_id)
     return _spreadsheet
