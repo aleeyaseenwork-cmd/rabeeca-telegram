@@ -1,0 +1,119 @@
+"""
+Backend switch + live Sheets mirror.
+
+app.py and bot.py only ever import from here, never from db.py or
+db_mongo.py directly. Two things happen in this one file:
+
+1. DB_BACKEND in .env decides whether reads/writes go to SQLite or MongoDB.
+2. Every write also gets mirrored into Google Sheets (if GOOGLE_SHEETS_ENABLED=1),
+   so there's a live, human-readable backup outside the main database.
+   Sheets mirroring never blocks or breaks a write — see sheets_sync.py.
+"""
+import os
+import logging
+
+log = logging.getLogger(__name__)
+
+_BACKEND = os.environ.get("DB_BACKEND", "sqlite").strip().lower()
+
+if _BACKEND == "mongodb":
+    from database import db_mongo as _impl
+else:
+    from database import db as _impl
+
+from database import sheets_sync
+
+BACKEND_NAME = _BACKEND
+
+# ---- pure passthroughs (reads, and things Sheets doesn't need to mirror) --
+init_db = _impl.init_db
+get_setting = _impl.get_setting
+set_setting = _impl.set_setting
+get_all_settings = _impl.get_all_settings
+get_admin_ids = _impl.get_admin_ids
+set_admin_ids = _impl.set_admin_ids
+get_stats = _impl.get_stats
+get_subscribers = _impl.get_subscribers
+export_subscribers = _impl.export_subscribers
+get_panels = _impl.get_panels
+get_active_panel = _impl.get_active_panel
+get_expiring_subscribers = _impl.get_expiring_subscribers
+get_expired_subscribers = _impl.get_expired_subscribers
+get_dev_table = _impl.get_dev_table
+
+
+# --------------------------------------------------- wrapped write ops ----
+# Each of these does the real write first (source of truth), then makes a
+# best-effort attempt to mirror the result into Google Sheets.
+
+def update_subscriber(sub_id, fields):
+    ok = _impl.update_subscriber(sub_id, fields)
+    if ok:
+        try:
+            row = _impl.get_subscriber(sub_id)
+            if row:
+                sheets_sync.mirror_subscriber(row)
+        except Exception as e:
+            log.warning("Could not mirror subscriber %s to Sheets: %s", sub_id, e)
+    return ok
+
+
+def create_panel(name, message_text, buttons):
+    _impl.create_panel(name, message_text, buttons)
+    try:
+        panels = _impl.get_panels()
+        if panels:
+            sheets_sync.mirror_panel(panels[0])  # most recently created, sorted desc
+    except Exception as e:
+        log.warning("Could not mirror new panel to Sheets: %s", e)
+
+
+def update_panel(panel_id, name, message_text, buttons, active=1):
+    _impl.update_panel(panel_id, name, message_text, buttons, active)
+    try:
+        match = next((p for p in _impl.get_panels() if p["id"] == str(panel_id)), None)
+        if match:
+            sheets_sync.mirror_panel(match)
+    except Exception as e:
+        log.warning("Could not mirror updated panel %s to Sheets: %s", panel_id, e)
+
+
+def delete_panel(panel_id):
+    _impl.delete_panel(panel_id)
+    try:
+        sheets_sync.mirror_panel_deleted(panel_id)
+    except Exception as e:
+        log.warning("Could not remove deleted panel %s from Sheets: %s", panel_id, e)
+
+
+def record_payment_success(telegram_user_id, amount, provider, provider_ref, subscriber_id=None):
+    _impl.record_payment_success(telegram_user_id, amount, provider, provider_ref, subscriber_id)
+    try:
+        rows = _impl.get_dev_table("payments")
+        if rows:
+            sheets_sync.mirror_payment(rows[-1])  # just-inserted row
+    except Exception as e:
+        log.warning("Could not mirror payment to Sheets: %s", e)
+
+
+def record_payment_failed(telegram_user_id, provider, failure_reason, subscriber_id=None):
+    _impl.record_payment_failed(telegram_user_id, provider, failure_reason, subscriber_id)
+    try:
+        rows = _impl.get_dev_table("payments")
+        if rows:
+            sheets_sync.mirror_payment(rows[-1])
+    except Exception as e:
+        log.warning("Could not mirror failed payment to Sheets: %s", e)
+
+
+def create_pending_subscriber(telegram_user_id, telegram_username, panel_id, button_text, duration_type, price, provider):
+    new_id = _impl.create_pending_subscriber(
+        telegram_user_id, telegram_username, panel_id, button_text, duration_type, price, provider,
+    )
+    try:
+        row = _impl.get_subscriber(new_id)
+        if row:
+            sheets_sync.mirror_subscriber(row)
+    except Exception as e:
+        log.warning("Could not mirror new subscriber to Sheets: %s", e)
+    return new_id

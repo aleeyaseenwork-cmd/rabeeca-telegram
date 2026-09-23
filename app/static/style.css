@@ -1,0 +1,260 @@
+:root {
+  --bg: #ffffff;
+  --surface: #f7f7f8;
+  --border: #e5e5e8;
+  --text: #1c1c1e;
+  --text-muted: #6b6b70;
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --success: #16a34a;
+  --pending: #d97706;
+  --failed: #dc2626;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ---- login ---- */
+.login-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--surface);
+}
+.login-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 32px;
+  width: 320px;
+  text-align: center;
+}
+.login-card h1 { font-size: 18px; margin-bottom: 16px; }
+.login-card input {
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.login-card button {
+  width: 100%;
+}
+.error { color: var(--failed); font-size: 13px; margin-bottom: 12px; }
+
+/* ---- layout ---- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+}
+.topbar h1 { font-size: 17px; font-weight: 600; margin: 0; }
+.tabs { display: flex; gap: 4px; }
+.tab-btn {
+  background: none;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.tab-btn.active { background: var(--surface); color: var(--text); font-weight: 600; }
+.topbar-actions { display: flex; align-items: center; gap: 14px; }
+#settingsBtn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  font-size: 16px;
+}
+.logout-link { color: var(--text-muted); font-size: 13px; text-decoration: none; }
+
+main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+/* ---- stat cards ---- */
+.stat-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.stat-label { font-size: 13px; color: var(--text-muted); }
+.stat-value { font-size: 24px; font-weight: 700; }
+
+/* ---- toolbar ---- */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.toolbar input[type="text"], .toolbar select {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+#searchInput { flex: 1; min-width: 180px; }
+
+button {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 9px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  font-weight: 500;
+}
+button:hover { background: var(--accent-hover); }
+button.secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+button.secondary:hover { background: var(--border); }
+
+/* ---- table ---- */
+.table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+th { background: var(--surface); font-weight: 600; color: var(--text-muted); }
+tr:last-child td { border-bottom: none; }
+
+.badge {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge.successful, .badge.active { background: #dcfce7; color: var(--success); }
+.badge.pending { background: #fef3c7; color: var(--pending); }
+.badge.failed, .badge.expired { background: #fee2e2; color: var(--failed); }
+.badge.cancelled { background: #e5e5e8; color: var(--text-muted); }
+
+.pagination {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-top: 16px;
+}
+.pagination button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+}
+.pagination button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* ---- plans ---- */
+.panels-list { display: flex; flex-direction: column; gap: 12px; }
+.panel-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.panel-card-main { flex: 1; }
+.panel-card h3 { margin: 0 0 6px; font-size: 15px; }
+.panel-card p { margin: 0 0 8px; color: var(--text-muted); font-size: 13px; }
+.panel-buttons-preview { display: flex; flex-wrap: wrap; gap: 6px; }
+.panel-buttons-preview span {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.panel-card-actions { display: flex; gap: 8px; flex-shrink: 0; }
+
+/* ---- modal ---- */
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.modal.hidden { display: none; }
+.modal-box {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 420px;
+  max-height: 85vh;
+  overflow-y: auto;
+}
+.modal-box.wide { width: 560px; }
+.modal-box h2 { margin-top: 0; font-size: 16px; }
+.modal-box label { display: block; font-size: 12px; color: var(--text-muted); margin: 12px 0 4px; }
+.modal-box input, .modal-box textarea, .modal-box select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.modal-box textarea { resize: vertical; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.checkbox-label { display: flex !important; align-items: center; gap: 8px; }
+.checkbox-label input { width: auto !important; }
+.hint { font-size: 12px; color: var(--text-muted); }
+
+.button-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.button-row input { flex: 1; }
+.button-row select { width: 110px; }
+.button-row .remove-btn {
+  background: var(--surface);
+  color: var(--failed);
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+}
+
+#devJson {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
