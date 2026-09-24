@@ -85,7 +85,7 @@ def init_db():
     defaults = {
         "dashboard_title": "Subscription Dashboard",
         "currency_symbol": "$",
-        "active_provider": "stripe",
+        "active_providers": "stripe",
         "reminder_days_before": "3",
         "auto_kick_on_expiry": "0",
     }
@@ -221,6 +221,21 @@ def get_subscribers(status="", pay_status="", search="", page=1, page_size=30):
 def get_subscriber(sub_id):
     conn = get_conn()
     row = conn.execute("SELECT * FROM subscribers WHERE id = ?", (int(sub_id),)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    d = _row_with_last_payment(conn, row)
+    conn.close()
+    return d
+
+
+def get_latest_pending_subscriber(telegram_user_id):
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM subscribers WHERE telegram_user_id = ? AND status = 'pending' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (str(telegram_user_id),),
+    ).fetchone()
     if not row:
         conn.close()
         return None

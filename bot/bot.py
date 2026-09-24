@@ -57,7 +57,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+PROVIDER_LABELS = {"stripe": "Stripe", "ccbill": "CCBill", "paypal": "PayPal"}
+
+
+def get_active_providers():
+    raw = dal.get_setting("active_providers", "stripe")
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+
 async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 1: plan chosen. If only one provider is active, skip straight
+    to payment. If several are active, ask which one to pay with."""
     query = update.callback_query
     await query.answer()
 
@@ -72,14 +82,54 @@ async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chosen = buttons[idx]
-    user = query.from_user
-    provider = dal.get_setting("active_provider", "stripe")
+    providers = get_active_providers()
 
-    # Create the pending subscriber record now; it flips to active once
-    # the payment webhook confirms success.
-    dal.create_pending_subscriber(
-        user.id, user.username, None, chosen["text"], chosen["duration_type"], chosen["price"], provider,
+    if len(providers) <= 1:
+        provider = providers[0] if providers else "stripe"
+        await _send_payment_link(query, chosen, provider)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton(f"Pay with {PROVIDER_LABELS.get(p, p.title())}", callback_data=f"pay:{idx}:{p}")]
+        for p in providers
+    ]
+    context.user_data["panel_buttons"] = buttons
+    await query.edit_message_text(
+        f"You selected: {chosen['text']} ({chosen['price']})\n\nChoose a payment method:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+
+async def handle_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Step 2 (only reached with multiple active providers): provider chosen."""
+    query = update.callback_query
+    await query.answer()
+
+    buttons = context.user_data.get("panel_buttons")
+    if not buttons:
+        panel = dal.get_active_panel()
+        buttons = panel["buttons"] if panel else []
+
+    _, idx_str, provider = query.data.split(":", 2)
+    idx = int(idx_str)
+    if idx >= len(buttons):
+        await query.edit_message_text("This plan is no longer available, please /start again.")
+        return
+
+    chosen = buttons[idx]
+    await _send_payment_link(query, chosen, provider)
+
+
+async def _send_payment_link(query, chosen, provider):
+    user = query.from_user
+
+    # Avoid creating duplicate pending rows if Telegram redelivers the same
+    # tap (happens if the bot restarts mid-click, or on a double tap).
+    existing = dal.get_latest_pending_subscriber(user.id)
+    if not (existing and existing["button_text"] == chosen["text"] and existing["duration_type"] == chosen["duration_type"]):
+        dal.create_pending_subscriber(
+            user.id, user.username, None, chosen["text"], chosen["duration_type"], chosen["price"], provider,
+        )
 
     checkout_link = build_checkout_link(user.id, chosen, provider)
 
@@ -89,7 +139,8 @@ async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    buy_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("💳 Buy Now", url=checkout_link)]])
+    label = f"💳 Pay with {PROVIDER_LABELS.get(provider, provider.title())}"
+    buy_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(label, url=checkout_link)]])
 
     await query.edit_message_text(
         f"You selected: {chosen['text']} ({chosen['price']})\n\n"
@@ -102,7 +153,7 @@ async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def build_checkout_link(telegram_user_id, plan, provider):
     """
     Builds the real payment link for the chosen plan. Stripe is fully wired
-    up (test or live key, whichever is in .env). PayPal/CCBill return a
+    up (test or live key, whichever is in .env). CCBill/PayPal return a
     placeholder until you wire up their SDKs the same way.
     client_reference_id carries the Telegram user id so the webhook in
     app/app.py knows who to activate once payment succeeds.
@@ -133,11 +184,11 @@ def build_checkout_link(telegram_user_id, plan, provider):
         except Exception as e:
             log.error("Stripe checkout session failed: %s", e)
             return None
-    elif provider == "paypal":
-        # TODO: wire up PayPal SDK the same way once ready
-        return f"{DASHBOARD_URL}/checkout/paypal?ref={telegram_user_id}&price={plan['price']}"
+    elif provider == "ccbill":
+        # TODO: wire up CCBill the same way once CCBILL_* env vars are set
+        return f"{DASHBOARD_URL}/checkout/ccbill?ref={telegram_user_id}&price={plan['price']}"
     else:
-        # TODO: wire up CCBill the same way once ready
+        # TODO: wire up PayPal the same way once ready
         return f"{DASHBOARD_URL}/checkout/ccbill?ref={telegram_user_id}&price={plan['price']}"
 
 
@@ -177,6 +228,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(handle_buy, pattern=r"^buy:"))
+    app.add_handler(CallbackQueryHandler(handle_pay, pattern=r"^pay:"))
 
     # daily reminder/auto-kick job, runs once every 24h
     app.job_queue.run_repeating(send_reminders_and_kick, interval=24 * 60 * 60, first=10)

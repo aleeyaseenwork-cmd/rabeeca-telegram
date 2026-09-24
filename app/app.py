@@ -7,7 +7,7 @@ Run with: python app.py
 """
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 
 from flask import (
@@ -25,6 +25,10 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-env")
 
 DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
+
+DURATION_DAYS = {"weekly": 7, "monthly": 30, "onetime": 36500}  # ~100yr for lifetime
 
 dal.init_db()
 
@@ -239,14 +243,49 @@ def stripe_webhook():
         session_obj = payload.get("data", {}).get("object", {})
         telegram_user_id = session_obj.get("client_reference_id", "unknown")
         amount = (session_obj.get("amount_total", 0) or 0) / 100
-        dal.record_payment_success(telegram_user_id, amount, "stripe", session_obj.get("id", ""))
+
+        # find the pending subscriber this payment belongs to, so we can
+        # actually link the payment record and flip them to active
+        pending = dal.get_latest_pending_subscriber(telegram_user_id)
+        sub_id = pending["id"] if pending else None
+
+        dal.record_payment_success(telegram_user_id, amount, "stripe", session_obj.get("id", ""), subscriber_id=sub_id)
+
+        if pending:
+            days = DURATION_DAYS.get(pending.get("duration_type"), 30)
+            expiry = (datetime.utcnow() + timedelta(days=days)).isoformat()
+            dal.update_subscriber(sub_id, {"status": "active", "expiry_date": expiry})
+            _notify_and_invite(telegram_user_id)
 
     elif event_type == "checkout.session.async_payment_failed":
         session_obj = payload.get("data", {}).get("object", {})
         telegram_user_id = session_obj.get("client_reference_id", "unknown")
-        dal.record_payment_failed(telegram_user_id, "stripe", "payment declined")
+        pending = dal.get_latest_pending_subscriber(telegram_user_id)
+        sub_id = pending["id"] if pending else None
+        dal.record_payment_failed(telegram_user_id, "stripe", "payment declined", subscriber_id=sub_id)
 
     return jsonify({"received": True})
+
+
+def _notify_and_invite(telegram_user_id):
+    """Sends the user a group invite link once their payment is confirmed."""
+    if not BOT_TOKEN or not GROUP_CHAT_ID:
+        return
+    try:
+        import asyncio
+        from telegram import Bot
+
+        async def _send():
+            bot = Bot(token=BOT_TOKEN)
+            invite = await bot.create_chat_invite_link(chat_id=GROUP_CHAT_ID, member_limit=1)
+            await bot.send_message(
+                chat_id=int(telegram_user_id),
+                text=f"Payment confirmed! Join the group here:\n{invite.invite_link}",
+            )
+
+        asyncio.run(_send())
+    except Exception as e:
+        app.logger.warning("Could not send invite to %s: %s", telegram_user_id, e)
 
 
 if __name__ == "__main__":

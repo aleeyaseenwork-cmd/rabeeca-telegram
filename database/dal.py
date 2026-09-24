@@ -40,6 +40,7 @@ get_active_panel = _impl.get_active_panel
 get_expiring_subscribers = _impl.get_expiring_subscribers
 get_expired_subscribers = _impl.get_expired_subscribers
 get_dev_table = _impl.get_dev_table
+get_latest_pending_subscriber = _impl.get_latest_pending_subscriber
 
 
 # --------------------------------------------------- wrapped write ops ----

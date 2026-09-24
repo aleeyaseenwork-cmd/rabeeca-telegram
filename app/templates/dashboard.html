@@ -8,49 +8,49 @@
 </head>
 <body>
   <header class="topbar">
-    <h1 id="dashTitle">{{ title }}</h1>
+    <div>
+      <h1 id="dashTitle">{{ title }}</h1>
+      <span class="topbar-date" id="currentDate"></span>
+    </div>
     <nav class="tabs">
-      <button class="tab-btn active" data-tab="overview">Overview</button>
-      <button class="tab-btn" data-tab="subscribers">Subscribers</button>
+      <button class="tab-btn active" data-tab="subscribers">Subscribers</button>
       <button class="tab-btn" data-tab="plans">Plans</button>
     </nav>
     <div class="topbar-actions">
-      <button id="settingsBtn" title="Settings">⚙</button>
+      <button id="settingsBtn" title="Settings">⚙ Settings</button>
       <a href="/logout" class="logout-link">Log out</a>
     </div>
   </header>
 
   <main>
-    <!-- OVERVIEW TAB -->
-    <section id="tab-overview" class="tab-panel active">
-      <div class="stat-cards">
-        <div class="stat-card">
-          <span class="stat-label">Total Revenue</span>
-          <span class="stat-value" id="statTotalRevenue">-</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">This Month</span>
-          <span class="stat-value" id="statMonthRevenue">-</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Active Subscribers</span>
-          <span class="stat-value" id="statActiveSubs">-</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-label">Expiring in 3 Days</span>
-          <span class="stat-value" id="statExpiringSoon">-</span>
-        </div>
+    <div class="stat-cards">
+      <div class="stat-card">
+        <span class="stat-label">Total Revenue</span>
+        <span class="stat-value" id="statTotalRevenue">-</span>
       </div>
-    </section>
+      <div class="stat-card">
+        <span class="stat-label">This Month</span>
+        <span class="stat-value" id="statMonthRevenue">-</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Active Subscribers</span>
+        <span class="stat-value" id="statActiveSubs">-</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Expiring in 3 Days</span>
+        <span class="stat-value" id="statExpiringSoon">-</span>
+      </div>
+    </div>
 
     <!-- SUBSCRIBERS TAB -->
-    <section id="tab-subscribers" class="tab-panel">
+    <section id="tab-subscribers" class="tab-panel active">
       <div class="toolbar">
         <input type="text" id="searchInput" placeholder="Search username or Telegram ID...">
         <select id="statusFilter">
           <option value="">All statuses</option>
           <option value="active">Active</option>
           <option value="expired">Expired</option>
+          <option value="pending">Pending</option>
           <option value="cancelled">Cancelled</option>
         </select>
         <select id="payStatusFilter">
@@ -144,12 +144,14 @@
       <input type="text" id="settingTitle">
       <label>Currency symbol</label>
       <input type="text" id="settingCurrency" maxlength="3">
-      <label>Active payment provider</label>
-      <select id="settingProvider">
-        <option value="stripe">Stripe</option>
-        <option value="paypal">PayPal</option>
-        <option value="ccbill">CCBill</option>
-      </select>
+      <label>Active payment providers (select one or more)</label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="providerStripe" value="stripe"> Stripe
+      </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="providerCcbill" value="ccbill"> CCBill
+      </label>
+      <p class="hint">If more than one is active, the bot will ask the buyer which one to pay with.</p>
       <label>Reminder days before expiry</label>
       <input type="number" id="settingReminderDays" min="0">
       <label class="checkbox-label">

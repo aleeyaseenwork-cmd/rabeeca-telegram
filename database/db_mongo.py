@@ -45,7 +45,7 @@ def init_db():
     defaults = {
         "dashboard_title": "Subscription Dashboard",
         "currency_symbol": "$",
-        "active_provider": "stripe",
+        "active_providers": "stripe",
         "reminder_days_before": "3",
         "auto_kick_on_expiry": "0",
     }
@@ -163,6 +163,15 @@ def get_subscribers(status="", pay_status="", search="", page=1, page_size=30):
 def get_subscriber(sub_id):
     db = _get_db()
     doc = db.subscribers.find_one({"_id": _oid(sub_id)})
+    return _serialize_subscriber(db, doc) if doc else None
+
+
+def get_latest_pending_subscriber(telegram_user_id):
+    db = _get_db()
+    doc = db.subscribers.find_one(
+        {"telegram_user_id": str(telegram_user_id), "status": "pending"},
+        sort=[("created_at", -1)],
+    )
     return _serialize_subscriber(db, doc) if doc else None
 
 

@@ -261,7 +261,9 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
   const s = await res.json();
   document.getElementById("settingTitle").value = s.dashboard_title || "";
   document.getElementById("settingCurrency").value = s.currency_symbol || "$";
-  document.getElementById("settingProvider").value = s.active_provider || "stripe";
+  const activeProviders = (s.active_providers || "stripe").split(",").map(p => p.trim());
+  document.getElementById("providerStripe").checked = activeProviders.includes("stripe");
+  document.getElementById("providerCcbill").checked = activeProviders.includes("ccbill");
   document.getElementById("settingReminderDays").value = s.reminder_days_before || 3;
   document.getElementById("settingAutoKick").checked = s.auto_kick_on_expiry === "1";
   document.getElementById("settingAdminIds").value = (s.admin_ids || []).join("\n");
@@ -273,13 +275,16 @@ document.getElementById("settingsCancelBtn").addEventListener("click", () => {
 document.getElementById("settingsSaveBtn").addEventListener("click", async () => {
   const admin_ids = document.getElementById("settingAdminIds").value
     .split("\n").map(s => s.trim()).filter(Boolean);
+  const providers = [];
+  if (document.getElementById("providerStripe").checked) providers.push("stripe");
+  if (document.getElementById("providerCcbill").checked) providers.push("ccbill");
   await fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       dashboard_title: document.getElementById("settingTitle").value,
       currency_symbol: document.getElementById("settingCurrency").value,
-      active_provider: document.getElementById("settingProvider").value,
+      active_providers: providers.join(","),
       reminder_days_before: document.getElementById("settingReminderDays").value,
       auto_kick_on_expiry: document.getElementById("settingAutoKick").checked ? "1" : "0",
       admin_ids,
@@ -291,4 +296,12 @@ document.getElementById("settingsSaveBtn").addEventListener("click", async () =>
 });
 
 // ---------- init ----------
+function renderCurrentDate() {
+  const el = document.getElementById("currentDate");
+  if (el) {
+    el.textContent = new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+  }
+}
+renderCurrentDate();
 loadStats();
+loadSubscribers();
