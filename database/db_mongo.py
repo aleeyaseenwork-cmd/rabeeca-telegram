@@ -46,8 +46,8 @@ def init_db():
     db.subscribers.create_index("status")
     index = db.subscribers.index_information().get("telegram_user_id_1")
     if index and not index.get("unique"):
-        db.subscribers.drop_index("telegram_user_id_1")
-    db.subscribers.create_index("telegram_user_id", unique=True)
+    db.subscribers.drop_index("telegram_user_id_1")
+    db.subscribers.create_index("telegram_user_id")
     db.payments.create_index("subscriber_id")
     db.payments.create_index("status")
     db.settings.create_index("key", unique=True)
