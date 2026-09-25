@@ -39,16 +39,49 @@ def _oid(id_str):
         return id_str
 
 
+def _dedupe_subscribers(db):
+    """
+    One-time cleanup for databases created before telegram_user_id was
+    unique. Merges duplicate rows for the same user into one (keeping the
+    most recent, summing purchase_count) so the unique index below can
+    actually build.
+    """
+    pipeline = [
+        {"$group": {"_id": "$telegram_user_id", "ids": {"$push": "$_id"}, "count": {"$sum": 1}}},
+        {"$match": {"count": {"$gt": 1}}},
+    ]
+    for group in db.subscribers.aggregate(pipeline):
+        docs = list(db.subscribers.find({"_id": {"$in": group["ids"]}}).sort("created_at", -1))
+        keep = docs[0]
+        total_purchases = sum(d.get("purchase_count", 0) or 0 for d in docs)
+        db.subscribers.update_one({"_id": keep["_id"]}, {"$set": {"purchase_count": total_purchases}})
+        db.subscribers.delete_many({"_id": {"$in": [d["_id"] for d in docs[1:]]}})
+
+
 def init_db():
     db = _get_db()
 
     db.panels.create_index("active")
     db.subscribers.create_index("status")
-    db.subscribers.create_index("telegram_user_id", unique=True)
     db.payments.create_index("subscriber_id")
     db.payments.create_index("status")
     db.settings.create_index("key", unique=True)
     db.admins.create_index("telegram_admin_id", unique=True)
+
+    try:
+        _dedupe_subscribers(db)
+        # a prior deploy may have already created a non-unique index on
+        # this field with the same auto-generated name; drop it first or
+        # MongoDB refuses to build the unique version under that name
+        existing = db.subscribers.index_information()
+        if "telegram_user_id_1" in existing and not existing["telegram_user_id_1"].get("unique"):
+            db.subscribers.drop_index("telegram_user_id_1")
+        db.subscribers.create_index("telegram_user_id", unique=True)
+    except Exception as e:
+        # Never let index maintenance crash the app on boot — worst case
+        # the unique constraint just isn't enforced yet.
+        import logging
+        logging.getLogger(__name__).warning("Could not enforce unique telegram_user_id index: %s", e)
 
     defaults = {
         "dashboard_title": "Subscription Dashboard",
