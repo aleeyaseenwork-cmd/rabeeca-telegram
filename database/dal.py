@@ -5,8 +5,8 @@ app.py and bot.py only ever import from here, never from db.py or
 db_mongo.py directly. Two things happen in this one file:
 
 1. DB_BACKEND in .env decides whether reads/writes go to SQLite or MongoDB.
-2. Every write also gets mirrored into Google Sheets (if GOOGLE_SHEETS_ENABLED=1),
-   so there's a live, human-readable backup outside the main database.
+2. Every write also gets mirrored into Google Sheets (if GOOGLE_SHEET_ID is
+   set), so there's a live, human-readable backup outside the main database.
    Sheets mirroring never blocks or breaks a write — see sheets_sync.py.
 """
 import os
@@ -40,7 +40,9 @@ get_active_panel = _impl.get_active_panel
 get_expiring_subscribers = _impl.get_expiring_subscribers
 get_expired_subscribers = _impl.get_expired_subscribers
 get_dev_table = _impl.get_dev_table
-get_latest_pending_subscriber = _impl.get_latest_pending_subscriber
+get_subscriber = _impl.get_subscriber
+get_subscriber_by_telegram_id = _impl.get_subscriber_by_telegram_id
+get_latest_pending_subscriber = _impl.get_latest_pending_subscriber  # back-compat alias
 
 
 # --------------------------------------------------- wrapped write ops ----
@@ -57,6 +59,23 @@ def update_subscriber(sub_id, fields):
         except Exception as e:
             log.warning("Could not mirror subscriber %s to Sheets: %s", sub_id, e)
     return ok
+
+
+def set_all_auto_renew(value):
+    _impl.set_all_auto_renew(value)
+    try:
+        for row in _impl.get_subscribers(page=1, page_size=10**9)["rows"]:
+            sheets_sync.mirror_subscriber(row)
+    except Exception as e:
+        log.warning("Could not mirror bulk auto-renew change to Sheets: %s", e)
+
+
+def delete_subscriber(sub_id):
+    _impl.delete_subscriber(sub_id)
+    try:
+        sheets_sync.mirror_subscriber_deleted(sub_id)
+    except Exception as e:
+        log.warning("Could not remove deleted subscriber %s from Sheets: %s", sub_id, e)
 
 
 def create_panel(name, message_text, buttons):
@@ -107,14 +126,22 @@ def record_payment_failed(telegram_user_id, provider, failure_reason, subscriber
         log.warning("Could not mirror failed payment to Sheets: %s", e)
 
 
-def create_pending_subscriber(telegram_user_id, telegram_username, panel_id, button_text, duration_type, price, provider):
-    new_id = _impl.create_pending_subscriber(
-        telegram_user_id, telegram_username, panel_id, button_text, duration_type, price, provider,
-    )
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider):
+    """
+    One row per Telegram user. First purchase creates it; buying again
+    while active stacks the expiry forward; buying again after expiry
+    starts fresh; lifetime always wins outright. See db.py/db_mongo.py.
+    """
+    sub_id = _impl.apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider)
     try:
-        row = _impl.get_subscriber(new_id)
+        row = _impl.get_subscriber(sub_id)
         if row:
             sheets_sync.mirror_subscriber(row)
     except Exception as e:
-        log.warning("Could not mirror new subscriber to Sheets: %s", e)
-    return new_id
+        log.warning("Could not mirror purchase for subscriber %s to Sheets: %s", sub_id, e)
+    return sub_id
+
+
+# kept for compatibility with any old callers; routes straight to apply_purchase
+def create_pending_subscriber(telegram_user_id, telegram_username, panel_id, button_text, duration_type, price, provider):
+    return apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider)

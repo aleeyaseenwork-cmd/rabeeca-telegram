@@ -2,7 +2,10 @@
 Telegram subscription bot.
 
 - /start shows the active panel with its buttons (from the dashboard).
-- Tapping a button creates a Stripe Checkout link (test mode by default).
+- Tapping a button creates a real Stripe Checkout session.
+- Nothing is written to the database until the webhook (app/app.py)
+  confirms payment succeeded — that's also where the purchase (new or
+  renewal/stacking) actually gets applied, see database/dal.py apply_purchase.
 - A daily job sends renewal reminders and optionally auto-kicks expired members.
 
 Run with: python bot.py
@@ -35,29 +38,30 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 dal.init_db()
 
-DURATION_DAYS = {"weekly": 7, "monthly": 30, "onetime": 36500}  # ~100yr for lifetime
+PROVIDER_LABELS = {"stripe": "Stripe", "ccbill": "CCBill", "paypal": "PayPal"}
+DURATION_LABELS = {"weekly": "week", "monthly": "month", "onetime": "lifetime"}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     panel = dal.get_active_panel()
     if not panel:
-        await update.message.reply_text("No plans are available right now. Please check back later.")
+        await update.message.reply_text(
+            "🚧 No plans are live right now — check back soon!"
+        )
         return
 
     buttons = panel["buttons"]
     keyboard = [
-        [InlineKeyboardButton(b["text"], callback_data=f"buy:{i}")]
+        [InlineKeyboardButton(f"💎 {b['text']}", callback_data=f"buy:{i}")]
         for i, b in enumerate(buttons)
     ]
     context.user_data["panel_buttons"] = buttons  # cache for callback lookup
 
     await update.message.reply_text(
-        panel["message_text"],
+        f"✨ *{panel['name']}* ✨\n\n{panel['message_text']}\n\n👇 Pick a plan to get started:",
         reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
     )
-
-
-PROVIDER_LABELS = {"stripe": "Stripe", "ccbill": "CCBill", "paypal": "PayPal"}
 
 
 def get_active_providers():
@@ -78,7 +82,7 @@ async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     idx = int(query.data.split(":")[1])
     if idx >= len(buttons):
-        await query.edit_message_text("This plan is no longer available, please /start again.")
+        await query.edit_message_text("⚠️ This plan is no longer available — send /start to see current plans.")
         return
 
     chosen = buttons[idx]
@@ -90,13 +94,14 @@ async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton(f"Pay with {PROVIDER_LABELS.get(p, p.title())}", callback_data=f"pay:{idx}:{p}")]
+        [InlineKeyboardButton(f"💳 Pay with {PROVIDER_LABELS.get(p, p.title())}", callback_data=f"pay:{idx}:{p}")]
         for p in providers
     ]
     context.user_data["panel_buttons"] = buttons
     await query.edit_message_text(
-        f"You selected: {chosen['text']} ({chosen['price']})\n\nChoose a payment method:",
+        f"🎉 Great choice: *{chosen['text']}*\n\n💰 Price: *{chosen['price']}*\n\nHow would you like to pay?",
         reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
     )
 
 
@@ -113,7 +118,7 @@ async def handle_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     _, idx_str, provider = query.data.split(":", 2)
     idx = int(idx_str)
     if idx >= len(buttons):
-        await query.edit_message_text("This plan is no longer available, please /start again.")
+        await query.edit_message_text("⚠️ This plan is no longer available — send /start to see current plans.")
         return
 
     chosen = buttons[idx]
@@ -122,20 +127,11 @@ async def handle_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def _send_payment_link(query, chosen, provider):
     user = query.from_user
-
-    # Avoid creating duplicate pending rows if Telegram redelivers the same
-    # tap (happens if the bot restarts mid-click, or on a double tap).
-    existing = dal.get_latest_pending_subscriber(user.id)
-    if not (existing and existing["button_text"] == chosen["text"] and existing["duration_type"] == chosen["duration_type"]):
-        dal.create_pending_subscriber(
-            user.id, user.username, None, chosen["text"], chosen["duration_type"], chosen["price"], provider,
-        )
-
-    checkout_link = build_checkout_link(user.id, chosen, provider)
+    checkout_link = build_checkout_link(user.id, user.username, chosen, provider)
 
     if checkout_link is None:
         await query.edit_message_text(
-            "Sorry, something went wrong setting up payment. Please try again in a moment or contact support."
+            "😕 Something went wrong setting up payment. Please try again in a moment, or contact support."
         )
         return
 
@@ -143,20 +139,25 @@ async def _send_payment_link(query, chosen, provider):
     buy_keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(label, url=checkout_link)]])
 
     await query.edit_message_text(
-        f"You selected: {chosen['text']} ({chosen['price']})\n\n"
-        "Tap the button below to complete payment.\n\n"
-        "You'll be added to the group automatically once payment is confirmed.",
+        f"🛒 *{chosen['text']}* — {chosen['price']}\n\n"
+        "👉 Tap below to complete your payment.\n\n"
+        "🔑 You'll get your group invite link automatically the moment payment is confirmed!",
         reply_markup=buy_keyboard,
+        parse_mode="Markdown",
     )
 
 
-def build_checkout_link(telegram_user_id, plan, provider):
+def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
     """
     Builds the real payment link for the chosen plan. Stripe is fully wired
     up (test or live key, whichever is in .env). CCBill/PayPal return a
     placeholder until you wire up their SDKs the same way.
-    client_reference_id carries the Telegram user id so the webhook in
-    app/app.py knows who to activate once payment succeeds.
+
+    The plan details ride along as Stripe metadata (nothing is written to
+    the database yet) — the webhook in app/app.py reads that metadata once
+    payment is confirmed and applies the purchase there (new sub, or
+    stacking/renewal onto an existing one). client_reference_id carries
+    the Telegram user id so the webhook knows who to activate.
     """
     if provider == "stripe":
         try:
@@ -177,6 +178,13 @@ def build_checkout_link(telegram_user_id, plan, provider):
                 mode="subscription" if is_subscription else "payment",
                 line_items=[line_item],
                 client_reference_id=str(telegram_user_id),
+                metadata={
+                    "telegram_user_id": str(telegram_user_id),
+                    "telegram_username": telegram_username or "",
+                    "button_text": plan["text"],
+                    "duration_type": plan["duration_type"],
+                    "price": str(plan["price"]),
+                },
                 success_url=f"{DASHBOARD_URL}/checkout/success",
                 cancel_url=f"{DASHBOARD_URL}/checkout/cancel",
             )
@@ -189,7 +197,7 @@ def build_checkout_link(telegram_user_id, plan, provider):
         return f"{DASHBOARD_URL}/checkout/ccbill?ref={telegram_user_id}&price={plan['price']}"
     else:
         # TODO: wire up PayPal the same way once ready
-        return f"{DASHBOARD_URL}/checkout/ccbill?ref={telegram_user_id}&price={plan['price']}"
+        return f"{DASHBOARD_URL}/checkout/paypal?ref={telegram_user_id}&price={plan['price']}"
 
 
 async def send_reminders_and_kick(context: ContextTypes.DEFAULT_TYPE):
@@ -202,8 +210,9 @@ async def send_reminders_and_kick(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id=int(sub["telegram_user_id"]),
-                text=f"Your subscription ({sub['button_text']}) expires soon. "
-                     f"Use /start to renew and stay in the group.",
+                text=f"⏰ Heads up! Your *{sub['button_text']}* plan expires soon.\n\n"
+                     f"Send /start to renew and keep your access.",
+                parse_mode="Markdown",
             )
         except Exception as e:
             log.warning("Could not message user %s: %s", sub["telegram_user_id"], e)

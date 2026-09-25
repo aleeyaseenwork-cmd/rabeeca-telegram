@@ -7,7 +7,8 @@ Run with: python app.py
 """
 import os
 import sys
-from datetime import datetime, timedelta
+import csv
+import io
 from functools import wraps
 
 from flask import (
@@ -15,6 +16,7 @@ from flask import (
     url_for, session, Response
 )
 from dotenv import load_dotenv
+from werkzeug.security import generate_password_hash, check_password_hash
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from database import dal
@@ -24,16 +26,33 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-env")
 
-DASHBOARD_PASSWORD = os.environ.get("DASHBOARD_PASSWORD", "changeme")
+DASHBOARD_PASSWORD_ENV = os.environ.get("DASHBOARD_PASSWORD", "changeme")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 
-DURATION_DAYS = {"weekly": 7, "monthly": 30, "onetime": 36500}  # ~100yr for lifetime
-
 dal.init_db()
+
+CSV_FIELDS = [
+    "id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
+    "price", "currency", "status", "auto_renew", "purchase_count", "link_sent",
+    "start_date", "expiry_date", "provider", "last_payment_status",
+]
 
 
 # ---------------------------------------------------------------- auth ----
+
+def _current_password_hash():
+    """A password set from the dashboard (Settings > Change password) always
+    wins over the .env value, so the change actually sticks between deploys."""
+    return dal.get_setting("dashboard_password_hash", "")
+
+
+def _check_password(pw):
+    stored_hash = _current_password_hash()
+    if stored_hash:
+        return check_password_hash(stored_hash, pw)
+    return pw == DASHBOARD_PASSWORD_ENV
+
 
 def login_required(f):
     @wraps(f)
@@ -50,7 +69,7 @@ def login_required(f):
 def login():
     if request.method == "POST":
         pw = request.form.get("password", "")
-        if pw == DASHBOARD_PASSWORD:
+        if _check_password(pw):
             session["logged_in"] = True
             return redirect(url_for("dashboard"))
         return render_template("login.html", error="Wrong password")
@@ -61,6 +80,20 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/api/change-password", methods=["POST"])
+@login_required
+def api_change_password():
+    data = request.get_json(force=True)
+    current = data.get("current_password", "")
+    new = data.get("new_password", "")
+    if not _check_password(current):
+        return jsonify({"error": "Current password is incorrect"}), 400
+    if len(new) < 6:
+        return jsonify({"error": "New password must be at least 6 characters"}), 400
+    dal.set_setting("dashboard_password_hash", generate_password_hash(new))
+    return jsonify({"ok": True})
 
 
 # ------------------------------------------------------------- pages ------
@@ -111,6 +144,21 @@ def api_update_subscriber(sub_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/subscribers/<sub_id>", methods=["DELETE"])
+@login_required
+def api_delete_subscriber(sub_id):
+    dal.delete_subscriber(sub_id)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/subscribers/auto-renew-all", methods=["POST"])
+@login_required
+def api_set_all_auto_renew():
+    data = request.get_json(force=True)
+    dal.set_all_auto_renew(bool(data.get("value")))
+    return jsonify({"ok": True})
+
+
 @app.route("/api/subscribers/export.csv")
 @login_required
 def export_csv():
@@ -120,14 +168,9 @@ def export_csv():
 
     rows = dal.export_subscribers(status, pay_status, search)
 
-    import csv
-    import io
     output = io.StringIO()
     if rows:
-        fieldnames = ["id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
-                      "price", "currency", "status", "auto_renew", "start_date", "expiry_date",
-                      "provider", "last_payment_status"]
-        writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(output, fieldnames=CSV_FIELDS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
     else:
@@ -138,6 +181,44 @@ def export_csv():
         mimetype="text/csv",
         headers={"Content-Disposition": "attachment; filename=subscribers_export.csv"},
     )
+
+
+@app.route("/api/subscribers/import.csv", methods=["POST"])
+@login_required
+def import_csv():
+    """
+    Bulk-restore subscribers from a CSV in the same shape as the export
+    (telegram_user_id is required, everything else optional). Existing rows
+    for the same telegram_user_id are updated in place, new ones are created.
+    """
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "no file uploaded"}), 400
+
+    try:
+        text = file.stream.read().decode("utf-8-sig")
+    except Exception:
+        return jsonify({"error": "could not read file as UTF-8 CSV"}), 400
+
+    reader = csv.DictReader(io.StringIO(text))
+    imported = 0
+    skipped = 0
+    for row in reader:
+        telegram_user_id = (row.get("telegram_user_id") or "").strip()
+        if not telegram_user_id:
+            skipped += 1
+            continue
+        dal.apply_purchase(
+            telegram_user_id,
+            row.get("telegram_username", ""),
+            row.get("button_text", "Imported plan"),
+            row.get("duration_type", "monthly"),
+            float(row.get("price") or 0),
+            row.get("provider", "stripe"),
+        )
+        imported += 1
+
+    return jsonify({"ok": True, "imported": imported, "skipped": skipped})
 
 
 # ----------------------------------------------------------- api: panels --
@@ -187,6 +268,7 @@ def api_delete_panel(panel_id):
 @login_required
 def api_get_settings():
     d = dal.get_all_settings()
+    d.pop("dashboard_password_hash", None)  # never leak the hash to the frontend
     d["admin_ids"] = dal.get_admin_ids()
     return jsonify(d)
 
@@ -196,7 +278,7 @@ def api_get_settings():
 def api_set_settings():
     data = request.get_json(force=True)
     for k, v in data.items():
-        if k == "admin_ids":
+        if k in ("admin_ids", "dashboard_password_hash"):
             continue
         dal.set_setting(k, v)
     if "admin_ids" in data:
@@ -235,6 +317,10 @@ def stripe_webhook():
     Receives Stripe events. In test/dev this just logs; wire up real
     signature verification with STRIPE_WEBHOOK_SECRET before going live.
     See README "Payments setup" section for the exact steps.
+
+    All the purchase logic (new subscriber vs. renewal stacking vs.
+    lifetime) lives in dal.apply_purchase — this handler just reads the
+    plan back out of Stripe metadata and applies it.
     """
     payload = request.get_json(silent=True) or {}
     event_type = payload.get("type", "")
@@ -243,34 +329,37 @@ def stripe_webhook():
         session_obj = payload.get("data", {}).get("object", {})
         telegram_user_id = session_obj.get("client_reference_id", "unknown")
         amount = (session_obj.get("amount_total", 0) or 0) / 100
+        metadata = session_obj.get("metadata", {}) or {}
 
-        # find the pending subscriber this payment belongs to, so we can
-        # actually link the payment record and flip them to active
-        pending = dal.get_latest_pending_subscriber(telegram_user_id)
-        sub_id = pending["id"] if pending else None
+        button_text = metadata.get("button_text", "Unknown plan")
+        duration_type = metadata.get("duration_type", "monthly")
+        price = float(metadata.get("price", amount) or amount)
+        telegram_username = metadata.get("telegram_username", "")
 
+        sub_id = dal.apply_purchase(
+            telegram_user_id, telegram_username, button_text, duration_type, price, "stripe",
+        )
         dal.record_payment_success(telegram_user_id, amount, "stripe", session_obj.get("id", ""), subscriber_id=sub_id)
 
-        if pending:
-            days = DURATION_DAYS.get(pending.get("duration_type"), 30)
-            expiry = (datetime.utcnow() + timedelta(days=days)).isoformat()
-            dal.update_subscriber(sub_id, {"status": "active", "expiry_date": expiry})
-            _notify_and_invite(telegram_user_id)
+        sent = _notify_and_invite(telegram_user_id)
+        dal.update_subscriber(sub_id, {"link_sent": 1 if sent else 0})
 
     elif event_type == "checkout.session.async_payment_failed":
         session_obj = payload.get("data", {}).get("object", {})
         telegram_user_id = session_obj.get("client_reference_id", "unknown")
-        pending = dal.get_latest_pending_subscriber(telegram_user_id)
-        sub_id = pending["id"] if pending else None
+        existing = dal.get_subscriber_by_telegram_id(telegram_user_id)
+        sub_id = existing["id"] if existing else None
         dal.record_payment_failed(telegram_user_id, "stripe", "payment declined", subscriber_id=sub_id)
 
     return jsonify({"received": True})
 
 
 def _notify_and_invite(telegram_user_id):
-    """Sends the user a group invite link once their payment is confirmed."""
+    """Sends the user a one-time group invite link once payment is confirmed.
+    Returns True if it was actually delivered, False otherwise (this is
+    exactly what the dashboard's Link Sent column reflects)."""
     if not BOT_TOKEN or not GROUP_CHAT_ID:
-        return
+        return False
     try:
         import asyncio
         from telegram import Bot
@@ -280,12 +369,15 @@ def _notify_and_invite(telegram_user_id):
             invite = await bot.create_chat_invite_link(chat_id=GROUP_CHAT_ID, member_limit=1)
             await bot.send_message(
                 chat_id=int(telegram_user_id),
-                text=f"Payment confirmed! Join the group here:\n{invite.invite_link}",
+                text=f"✅ *Payment confirmed!*\n\n🎉 Welcome aboard — tap below to join:\n{invite.invite_link}",
+                parse_mode="Markdown",
             )
 
         asyncio.run(_send())
+        return True
     except Exception as e:
         app.logger.warning("Could not send invite to %s: %s", telegram_user_id, e)
+        return False
 
 
 if __name__ == "__main__":

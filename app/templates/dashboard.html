@@ -5,99 +5,137 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }}</title>
 <link rel="stylesheet" href="/static/style.css">
+<script>
+  // apply saved theme before paint to avoid a flash of the wrong theme
+  (function(){ var t = localStorage.getItem('theme'); if (t) document.documentElement.setAttribute('data-theme', t); })();
+</script>
 </head>
 <body>
-  <header class="topbar">
-    <div>
-      <h1 id="dashTitle">{{ title }}</h1>
-      <span class="topbar-date" id="currentDate"></span>
-    </div>
-    <nav class="tabs">
-      <button class="tab-btn active" data-tab="subscribers">Subscribers</button>
-      <button class="tab-btn" data-tab="plans">Plans</button>
-    </nav>
-    <div class="topbar-actions">
-      <button id="settingsBtn" title="Settings">⚙ Settings</button>
-      <a href="/logout" class="logout-link">Log out</a>
-    </div>
-  </header>
+  <div class="page">
+    <header class="page-header">
+      <div class="breadcrumb">Bot <span>/</span> Dashboard</div>
+      <div class="header-row">
+        <div>
+          <h1 id="dashTitle">{{ title }}</h1>
+          <p class="subtitle">Manage subscribers, plans and payments</p>
+        </div>
+        <div class="header-actions">
+          <span class="last-updated">Updated <span id="currentDate"></span></span>
+          <button class="icon-btn" id="darkModeBtn" title="Toggle dark mode">🌙</button>
+          <button class="btn-outline" id="exportBtnHeader">⬇ Export Data</button>
+          <button class="btn-outline" id="importBtnHeader">⬆ Import Data</button>
+          <input type="file" id="importFileInput" accept=".csv" hidden>
+          <button class="btn-outline" id="settingsBtn">⚙ Settings</button>
+          <a href="/logout" class="btn-outline">Log out</a>
+        </div>
+      </div>
+    </header>
 
-  <main>
     <div class="stat-cards">
       <div class="stat-card">
-        <span class="stat-label">Total Revenue</span>
-        <span class="stat-value" id="statTotalRevenue">-</span>
+        <div class="stat-icon stat-icon-violet">💰</div>
+        <div>
+          <span class="stat-label">Total Revenue</span>
+          <span class="stat-value" id="statTotalRevenue">-</span>
+        </div>
       </div>
       <div class="stat-card">
-        <span class="stat-label">This Month</span>
-        <span class="stat-value" id="statMonthRevenue">-</span>
+        <div class="stat-icon stat-icon-green">📈</div>
+        <div>
+          <span class="stat-label">This Month</span>
+          <span class="stat-value" id="statMonthRevenue">-</span>
+        </div>
       </div>
       <div class="stat-card">
-        <span class="stat-label">Active Subscribers</span>
-        <span class="stat-value" id="statActiveSubs">-</span>
+        <div class="stat-icon stat-icon-blue">👥</div>
+        <div>
+          <span class="stat-label">Active Subscribers</span>
+          <span class="stat-value" id="statActiveSubs">-</span>
+        </div>
       </div>
       <div class="stat-card">
-        <span class="stat-label">Expiring in 3 Days</span>
-        <span class="stat-value" id="statExpiringSoon">-</span>
+        <div class="stat-icon stat-icon-amber">⏰</div>
+        <div>
+          <span class="stat-label">Expiring in 3 Days</span>
+          <span class="stat-value" id="statExpiringSoon">-</span>
+        </div>
       </div>
     </div>
 
-    <!-- SUBSCRIBERS TAB -->
-    <section id="tab-subscribers" class="tab-panel active">
-      <div class="toolbar">
-        <input type="text" id="searchInput" placeholder="Search username or Telegram ID...">
-        <select id="statusFilter">
-          <option value="">All statuses</option>
-          <option value="active">Active</option>
-          <option value="expired">Expired</option>
-          <option value="pending">Pending</option>
-          <option value="cancelled">Cancelled</option>
-        </select>
-        <select id="payStatusFilter">
-          <option value="">All payments</option>
-          <option value="successful">Successful</option>
-          <option value="pending">Pending</option>
-          <option value="failed">Failed</option>
-        </select>
-        <select id="pageSizeSelect">
-          <option value="20">20 / page</option>
-          <option value="30" selected>30 / page</option>
-          <option value="50">50 / page</option>
-        </select>
-        <button id="downloadCsvBtn">⬇ Download CSV</button>
-      </div>
+    <nav class="segmented">
+      <button class="segmented-btn active" data-tab="subscribers">Subscribers</button>
+      <button class="segmented-btn" data-tab="plans">Plans</button>
+    </nav>
 
-      <div class="table-wrap">
-        <table id="subsTable">
-          <thead>
-            <tr>
-              <th>User</th>
-              <th>Plan</th>
-              <th>Duration</th>
-              <th>Price</th>
-              <th>Status</th>
-              <th>Auto-renew</th>
-              <th>Payment</th>
-              <th>Expiry</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody id="subsTableBody"></tbody>
-        </table>
-      </div>
+    <main>
+      <!-- SUBSCRIBERS TAB -->
+      <section id="tab-subscribers" class="tab-panel active">
+        <div class="toolbar">
+          <div class="search-wrap">
+            <span class="search-icon">🔎</span>
+            <input type="text" id="searchInput" placeholder="Search username or Telegram ID...">
+          </div>
+          <select id="statusFilter" class="pill-select pill-status">
+            <option value="">All statuses</option>
+            <option value="active">Active</option>
+            <option value="expired">Expired</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+          <select id="payStatusFilter" class="pill-select pill-payment">
+            <option value="">All payments</option>
+            <option value="successful">Successful</option>
+            <option value="pending">Pending</option>
+            <option value="failed">Failed</option>
+          </select>
+          <select id="pageSizeSelect" class="pill-select">
+            <option value="20">20 / page</option>
+            <option value="30" selected>30 / page</option>
+            <option value="50">50 / page</option>
+          </select>
+        </div>
 
-      <div class="pagination" id="pagination"></div>
-    </section>
+        <div class="table-outer">
+          <div class="table-wrap">
+            <table id="subsTable">
+              <thead>
+                <tr>
+                  <th>User ID</th>
+                  <th>Username</th>
+                  <th>Plan</th>
+                  <th>Duration</th>
+                  <th>Price</th>
+                  <th>Status</th>
+                  <th>
+                    <label class="th-check">
+                      <input type="checkbox" id="autoRenewAllCheckbox" title="Tick/untick auto-renew for everyone">
+                      Auto-renew
+                    </label>
+                  </th>
+                  <th>Purchases</th>
+                  <th>Link Sent</th>
+                  <th>Payment</th>
+                  <th>Expiry</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="subsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
 
-    <!-- PLANS TAB -->
-    <section id="tab-plans" class="tab-panel">
-      <div class="toolbar">
-        <button id="newPanelBtn">+ New Panel</button>
-        <button id="devViewBtn">&lt;/&gt; Developer View</button>
-      </div>
-      <div id="panelsList" class="panels-list"></div>
-    </section>
-  </main>
+        <div class="pagination" id="pagination"></div>
+      </section>
+
+      <!-- PLANS TAB -->
+      <section id="tab-plans" class="tab-panel">
+        <div class="toolbar">
+          <button id="newPanelBtn" class="btn-primary">+ New Panel</button>
+          <button id="devViewBtn" class="btn-outline">&lt;/&gt; Developer View</button>
+        </div>
+        <div id="panelsList" class="panels-list"></div>
+      </section>
+    </main>
+  </div>
 
   <!-- Panel editor modal -->
   <div id="panelModal" class="modal hidden">
@@ -109,10 +147,10 @@
       <textarea id="panelMessage" rows="4"></textarea>
       <label>Buttons</label>
       <div id="buttonsEditor"></div>
-      <button id="addButtonBtn" type="button">+ Add one more button</button>
+      <button id="addButtonBtn" type="button" class="btn-outline">+ Add one more button</button>
       <div class="modal-actions">
         <button id="panelCancelBtn" class="secondary">Cancel</button>
-        <button id="panelSaveBtn">Save</button>
+        <button id="panelSaveBtn" class="btn-primary">Save</button>
       </div>
     </div>
   </div>
@@ -132,6 +170,17 @@
       <p class="hint">Read-only preview. Edit plans through the Plans tab; this is for quickly copying data into ChatGPT/Claude.</p>
       <div class="modal-actions">
         <button id="devCloseBtn" class="secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Row details modal (eye icon) -->
+  <div id="viewModal" class="modal hidden">
+    <div class="modal-box">
+      <h2>Subscriber Details</h2>
+      <div id="viewModalBody" class="view-details"></div>
+      <div class="modal-actions">
+        <button id="viewCloseBtn" class="secondary">Close</button>
       </div>
     </div>
   </div>
@@ -160,9 +209,19 @@
       </label>
       <label>Admin Telegram IDs (one per line)</label>
       <textarea id="settingAdminIds" rows="3"></textarea>
+
+      <hr class="modal-divider">
+      <h3>Change Password</h3>
+      <label>Current password</label>
+      <input type="password" id="currentPasswordInput" autocomplete="current-password">
+      <label>New password</label>
+      <input type="password" id="newPasswordInput" autocomplete="new-password">
+      <button id="changePasswordBtn" class="btn-outline" type="button">Update password</button>
+      <p class="hint" id="passwordChangeMsg"></p>
+
       <div class="modal-actions">
         <button id="settingsCancelBtn" class="secondary">Cancel</button>
-        <button id="settingsSaveBtn">Save</button>
+        <button id="settingsSaveBtn" class="btn-primary">Save</button>
       </div>
     </div>
   </div>

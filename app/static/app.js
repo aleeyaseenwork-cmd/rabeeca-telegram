@@ -1,7 +1,19 @@
+// ---------- dark mode ----------
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('theme', theme);
+  document.getElementById('darkModeBtn').textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+document.getElementById('darkModeBtn').addEventListener('click', () => {
+  const current = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+});
+applyTheme(document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light');
+
 // ---------- tab switching ----------
-document.querySelectorAll(".tab-btn").forEach(btn => {
+document.querySelectorAll(".segmented-btn").forEach(btn => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".segmented-btn").forEach(b => b.classList.remove("active"));
     document.querySelectorAll(".tab-panel").forEach(p => p.classList.remove("active"));
     btn.classList.add("active");
     document.getElementById("tab-" + btn.dataset.tab).classList.add("active");
@@ -13,7 +25,7 @@ document.querySelectorAll(".tab-btn").forEach(btn => {
 let currentPage = 1;
 let currencySymbol = "$";
 
-// ---------- overview ----------
+// ---------- overview stats ----------
 async function loadStats() {
   const res = await fetch("/api/stats");
   const data = await res.json();
@@ -39,38 +51,94 @@ async function loadSubscribers() {
   const data = await res.json();
   renderSubsTable(data.rows);
   renderPagination(data.total, data.page, data.page_size);
+  syncParentAutoRenewCheckbox(data.rows);
 }
 
+let allSubscriberRows = [];
+
 function renderSubsTable(rows) {
+  allSubscriberRows = rows;
   const tbody = document.getElementById("subsTableBody");
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-muted)">No subscribers found</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">No subscribers found</td></tr>`;
     return;
   }
   rows.forEach(r => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${r.telegram_username ? "@" + escapeHtml(r.telegram_username) : r.telegram_user_id}</td>
+      <td class="mono">${escapeHtml(r.telegram_user_id)}</td>
+      <td>${r.telegram_username ? "@" + escapeHtml(r.telegram_username) : "-"}</td>
       <td>${escapeHtml(r.button_text || "-")}</td>
-      <td>${escapeHtml(r.duration_type || "-")}</td>
+      <td><span class="badge ${r.duration_type}">${escapeHtml(r.duration_type || "-")}</span></td>
       <td>${currencySymbol}${(r.price || 0).toFixed(2)}</td>
       <td><span class="badge ${r.status}">${r.status}</span></td>
       <td>
-        <input type="checkbox" ${r.auto_renew ? "checked" : ""} onchange="toggleAutoRenew('${r.id}', this.checked)">
+        <input type="checkbox" class="auto-renew-checkbox" ${r.auto_renew ? "checked" : ""} onchange="toggleAutoRenew('${r.id}', this.checked)">
       </td>
+      <td class="mono">${r.purchase_count || 0}</td>
+      <td>${r.link_sent ? '<span class="link-yes">✓ Yes</span>' : '<span class="link-no">✕ No</span>'}</td>
       <td>${r.last_payment_status ? `<span class="badge ${r.last_payment_status}">${r.last_payment_status}</span>` : "-"}</td>
       <td>${r.expiry_date ? new Date(r.expiry_date).toLocaleDateString() : "-"}</td>
       <td>
-        <select onchange="updateSubStatus('${r.id}', this.value)">
-          <option value="active" ${r.status === "active" ? "selected" : ""}>Active</option>
-          <option value="expired" ${r.status === "expired" ? "selected" : ""}>Expired</option>
-          <option value="cancelled" ${r.status === "cancelled" ? "selected" : ""}>Cancelled</option>
-        </select>
+        <div class="row-actions">
+          <button title="View" onclick="viewSubscriber('${r.id}')">👁</button>
+          <button title="Edit status" onclick="cycleStatus('${r.id}', '${r.status}')">✏️</button>
+          <button title="More" onclick="toggleRowMenu(event, '${r.id}')">⋮</button>
+          <div class="row-menu hidden" id="rowMenu-${r.id}">
+            <button class="danger" onclick="deleteSubscriber('${r.id}')">🗑 Delete</button>
+          </div>
+        </div>
       </td>
     `;
     tbody.appendChild(tr);
   });
+}
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".row-actions")) {
+    document.querySelectorAll(".row-menu").forEach(m => m.classList.add("hidden"));
+  }
+});
+
+function toggleRowMenu(e, id) {
+  e.stopPropagation();
+  const menu = document.getElementById("rowMenu-" + id);
+  document.querySelectorAll(".row-menu").forEach(m => { if (m !== menu) m.classList.add("hidden"); });
+  menu.classList.toggle("hidden");
+}
+
+function viewSubscriber(id) {
+  const r = allSubscriberRows.find(x => x.id === id);
+  if (!r) return;
+  const rows = [
+    ["User ID", r.telegram_user_id],
+    ["Username", r.telegram_username ? "@" + r.telegram_username : "-"],
+    ["Plan", r.button_text || "-"],
+    ["Duration", r.duration_type || "-"],
+    ["Price", currencySymbol + (r.price || 0).toFixed(2)],
+    ["Status", r.status],
+    ["Auto-renew", r.auto_renew ? "Yes" : "No"],
+    ["Purchases", r.purchase_count || 0],
+    ["Invite link sent", r.link_sent ? "Yes" : "No"],
+    ["Last payment", r.last_payment_status || "-"],
+    ["Start date", r.start_date ? new Date(r.start_date).toLocaleString() : "-"],
+    ["Expiry", r.expiry_date ? new Date(r.expiry_date).toLocaleString() : "-"],
+    ["Provider", r.provider || "-"],
+  ];
+  document.getElementById("viewModalBody").innerHTML = rows.map(
+    ([k, v]) => `<div class="vd-row"><span>${k}</span><strong>${escapeHtml(String(v))}</strong></div>`
+  ).join("");
+  document.getElementById("viewModal").classList.remove("hidden");
+}
+document.getElementById("viewCloseBtn").addEventListener("click", () => {
+  document.getElementById("viewModal").classList.add("hidden");
+});
+
+const STATUS_CYCLE = { active: "expired", expired: "cancelled", cancelled: "active" };
+async function cycleStatus(id, current) {
+  const next = STATUS_CYCLE[current] || "active";
+  await updateSubStatus(id, next);
 }
 
 async function toggleAutoRenew(id, checked) {
@@ -79,6 +147,7 @@ async function toggleAutoRenew(id, checked) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ auto_renew: checked ? 1 : 0 }),
   });
+  loadSubscribers();
 }
 
 async function updateSubStatus(id, status) {
@@ -88,6 +157,33 @@ async function updateSubStatus(id, status) {
     body: JSON.stringify({ status }),
   });
   loadSubscribers();
+}
+
+async function deleteSubscriber(id) {
+  if (!confirm("Delete this subscriber? This can't be undone.")) return;
+  await fetch(`/api/subscribers/${id}`, { method: "DELETE" });
+  loadSubscribers();
+  loadStats();
+}
+
+// parent checkbox: tick/untick auto-renew for everyone currently loaded
+document.getElementById("autoRenewAllCheckbox").addEventListener("change", async (e) => {
+  const value = e.target.checked;
+  await fetch("/api/subscribers/auto-renew-all", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+  loadSubscribers();
+});
+
+function syncParentAutoRenewCheckbox(rows) {
+  const parent = document.getElementById("autoRenewAllCheckbox");
+  if (rows.length === 0) { parent.checked = false; parent.indeterminate = false; return; }
+  const allOn = rows.every(r => r.auto_renew);
+  const allOff = rows.every(r => !r.auto_renew);
+  parent.checked = allOn;
+  parent.indeterminate = !allOn && !allOff;
 }
 
 function renderPagination(total, page, pageSize) {
@@ -107,12 +203,34 @@ document.getElementById("searchInput").addEventListener("input", debounce(() => 
 document.getElementById("statusFilter").addEventListener("change", () => { currentPage = 1; loadSubscribers(); });
 document.getElementById("payStatusFilter").addEventListener("change", () => { currentPage = 1; loadSubscribers(); });
 document.getElementById("pageSizeSelect").addEventListener("change", () => { currentPage = 1; loadSubscribers(); });
-document.getElementById("downloadCsvBtn").addEventListener("click", () => {
+
+function currentExportParams() {
   const search = document.getElementById("searchInput").value;
   const status = document.getElementById("statusFilter").value;
   const payStatus = document.getElementById("payStatusFilter").value;
-  const params = new URLSearchParams({ search, status, pay_status: payStatus });
-  window.location.href = "/api/subscribers/export.csv?" + params.toString();
+  return new URLSearchParams({ search, status, pay_status: payStatus });
+}
+document.getElementById("exportBtnHeader").addEventListener("click", () => {
+  window.location.href = "/api/subscribers/export.csv?" + currentExportParams().toString();
+});
+document.getElementById("importBtnHeader").addEventListener("click", () => {
+  document.getElementById("importFileInput").click();
+});
+document.getElementById("importFileInput").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const formData = new FormData();
+  formData.append("file", file);
+  const res = await fetch("/api/subscribers/import.csv", { method: "POST", body: formData });
+  const data = await res.json();
+  if (res.ok) {
+    alert(`Imported ${data.imported} subscriber(s)${data.skipped ? `, skipped ${data.skipped}` : ""}.`);
+    loadSubscribers();
+    loadStats();
+  } else {
+    alert("Import failed: " + (data.error || "unknown error"));
+  }
+  e.target.value = "";
 });
 
 function debounce(fn, ms) {
@@ -160,21 +278,15 @@ async function deletePanel(id) {
 
 let editingPanelId = null;
 
-function openPanelModal() {
-  document.getElementById("panelModal").classList.remove("hidden");
-}
-function closePanelModal() {
-  document.getElementById("panelModal").classList.add("hidden");
-}
+function openPanelModal() { document.getElementById("panelModal").classList.remove("hidden"); }
+function closePanelModal() { document.getElementById("panelModal").classList.add("hidden"); }
 
 document.getElementById("newPanelBtn").addEventListener("click", () => {
   editingPanelId = null;
   document.getElementById("panelModalTitle").textContent = "New Panel";
   document.getElementById("panelName").value = "New Panel";
   document.getElementById("panelMessage").value = "Choose a plan below to get access.";
-  renderButtonsEditor([
-    { text: "1 Month", price: 25, duration_type: "monthly" },
-  ]);
+  renderButtonsEditor([{ text: "1 Month", price: 25, duration_type: "monthly" }]);
   openPanelModal();
 });
 
@@ -267,6 +379,9 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
   document.getElementById("settingReminderDays").value = s.reminder_days_before || 3;
   document.getElementById("settingAutoKick").checked = s.auto_kick_on_expiry === "1";
   document.getElementById("settingAdminIds").value = (s.admin_ids || []).join("\n");
+  document.getElementById("currentPasswordInput").value = "";
+  document.getElementById("newPasswordInput").value = "";
+  document.getElementById("passwordChangeMsg").textContent = "";
   document.getElementById("settingsModal").classList.remove("hidden");
 });
 document.getElementById("settingsCancelBtn").addEventListener("click", () => {
@@ -295,12 +410,31 @@ document.getElementById("settingsSaveBtn").addEventListener("click", async () =>
   loadStats();
 });
 
+document.getElementById("changePasswordBtn").addEventListener("click", async () => {
+  const current_password = document.getElementById("currentPasswordInput").value;
+  const new_password = document.getElementById("newPasswordInput").value;
+  const msg = document.getElementById("passwordChangeMsg");
+  const res = await fetch("/api/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password, new_password }),
+  });
+  const data = await res.json();
+  if (res.ok) {
+    msg.style.color = "var(--success)";
+    msg.textContent = "Password updated.";
+    document.getElementById("currentPasswordInput").value = "";
+    document.getElementById("newPasswordInput").value = "";
+  } else {
+    msg.style.color = "var(--failed)";
+    msg.textContent = data.error || "Could not update password.";
+  }
+});
+
 // ---------- init ----------
 function renderCurrentDate() {
   const el = document.getElementById("currentDate");
-  if (el) {
-    el.textContent = new Date().toLocaleDateString(undefined, { weekday: "long", year: "numeric", month: "long", day: "numeric" });
-  }
+  if (el) el.textContent = new Date().toLocaleDateString(undefined, { weekday: "short", year: "numeric", month: "short", day: "numeric" });
 }
 renderCurrentDate();
 loadStats();

@@ -31,8 +31,8 @@ CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "google_service_accou
 
 SUBSCRIBER_HEADERS = [
     "id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
-    "price", "currency", "status", "auto_renew", "start_date", "expiry_date",
-    "provider", "created_at",
+    "price", "currency", "status", "auto_renew", "purchase_count", "link_sent",
+    "start_date", "expiry_date", "provider", "created_at",
 ]
 PAYMENT_HEADERS = [
     "id", "subscriber_id", "telegram_user_id", "amount", "currency",
@@ -116,6 +116,20 @@ def mirror_payment(payment_dict):
         _upsert_row("Payments", PAYMENT_HEADERS, payment_dict)
     except Exception as e:
         log.warning("Sheets mirror (payment) failed: %s", e)
+
+
+def mirror_subscriber_deleted(sub_id):
+    if not is_enabled():
+        return
+    try:
+        ws = _get_worksheet("Subscribers", SUBSCRIBER_HEADERS)
+        id_column = ws.col_values(1)
+        row_id = str(sub_id)
+        if row_id in id_column:
+            row_number = id_column.index(row_id) + 1
+            ws.delete_rows(row_number)
+    except Exception as e:
+        log.warning("Sheets mirror (subscriber delete) failed: %s", e)
 
 
 def mirror_panel(panel_dict):

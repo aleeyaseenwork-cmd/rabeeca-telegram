@@ -1,6 +1,11 @@
 """
 SQLite backend (default). Implements the same function interface as
 database/db_mongo.py so database/dal.py can switch between them.
+
+One subscriber row per Telegram user (not one row per purchase). Buying
+again while already active extends the existing expiry date (stacking);
+buying again after expiry starts a fresh period from now. Lifetime
+purchases always win outright.
 """
 import sqlite3
 import json
@@ -9,12 +14,22 @@ from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
 
+DURATION_DAYS = {"weekly": 7, "monthly": 30, "onetime": 36500}  # ~100yr for lifetime
+LIFETIME_EXPIRY = (datetime(2126, 1, 1)).isoformat()
+
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+def _add_column_if_missing(conn, table, col_def):
+    col_name = col_def.split()[0]
+    existing = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+    if col_name not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
 
 
 def init_db():
@@ -35,7 +50,7 @@ def init_db():
     c.execute("""
     CREATE TABLE IF NOT EXISTS subscribers (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        telegram_user_id TEXT NOT NULL,
+        telegram_user_id TEXT NOT NULL UNIQUE,
         telegram_username TEXT,
         panel_id INTEGER,
         button_text TEXT,
@@ -47,10 +62,15 @@ def init_db():
         start_date TEXT,
         expiry_date TEXT,
         provider TEXT DEFAULT 'stripe',
+        purchase_count INTEGER DEFAULT 0,
+        link_sent INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         FOREIGN KEY (panel_id) REFERENCES panels(id)
     )
     """)
+    # migration for databases created before purchase_count/link_sent existed
+    _add_column_if_missing(conn, "subscribers", "purchase_count INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "subscribers", "link_sent INTEGER DEFAULT 0")
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS payments (
@@ -196,6 +216,36 @@ def _row_with_last_payment(conn, row):
     return d
 
 
+def get_subscriber(sub_id):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM subscribers WHERE id = ?", (int(sub_id),)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    d = _row_with_last_payment(conn, row)
+    conn.close()
+    return d
+
+
+def get_subscriber_by_telegram_id(telegram_user_id):
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM subscribers WHERE telegram_user_id = ?", (str(telegram_user_id),)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    d = _row_with_last_payment(conn, row)
+    conn.close()
+    return d
+
+
+# kept for backward compatibility with any code still calling it; now just
+# an alias since there is at most one (pending-or-not) row per user
+def get_latest_pending_subscriber(telegram_user_id):
+    return get_subscriber_by_telegram_id(telegram_user_id)
+
+
 def get_subscribers(status="", pay_status="", search="", page=1, page_size=30):
     query = "SELECT * FROM subscribers WHERE 1=1"
     params = []
@@ -218,34 +268,8 @@ def get_subscribers(status="", pay_status="", search="", page=1, page_size=30):
     return {"rows": rows[start:start + page_size], "total": total}
 
 
-def get_subscriber(sub_id):
-    conn = get_conn()
-    row = conn.execute("SELECT * FROM subscribers WHERE id = ?", (int(sub_id),)).fetchone()
-    if not row:
-        conn.close()
-        return None
-    d = _row_with_last_payment(conn, row)
-    conn.close()
-    return d
-
-
-def get_latest_pending_subscriber(telegram_user_id):
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT * FROM subscribers WHERE telegram_user_id = ? AND status = 'pending' "
-        "ORDER BY created_at DESC LIMIT 1",
-        (str(telegram_user_id),),
-    ).fetchone()
-    if not row:
-        conn.close()
-        return None
-    d = _row_with_last_payment(conn, row)
-    conn.close()
-    return d
-
-
 def update_subscriber(sub_id, fields):
-    allowed = ["status", "auto_renew", "expiry_date", "telegram_username"]
+    allowed = ["status", "auto_renew", "expiry_date", "telegram_username", "link_sent"]
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
         return False
@@ -257,9 +281,74 @@ def update_subscriber(sub_id, fields):
     return True
 
 
+def set_all_auto_renew(value):
+    conn = get_conn()
+    conn.execute("UPDATE subscribers SET auto_renew = ?", (1 if value else 0,))
+    conn.commit()
+    conn.close()
+
+
+def delete_subscriber(sub_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM payments WHERE subscriber_id = ?", (int(sub_id),))
+    conn.execute("DELETE FROM subscribers WHERE id = ?", (int(sub_id),))
+    conn.commit()
+    conn.close()
+
+
 def export_subscribers(status="", pay_status="", search=""):
     result = get_subscribers(status, pay_status, search, page=1, page_size=10**9)
     return result["rows"]
+
+
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider):
+    """
+    The one place purchase logic happens. Creates the subscriber row on a
+    first-ever purchase, or extends/stacks the existing one on a renewal:
+    - lifetime (onetime) always wins outright, regardless of prior state
+    - buying again while still active extends the current expiry forward
+    - buying again after expiry (or first time) starts fresh from now
+    Returns the subscriber's id (str).
+    """
+    days = DURATION_DAYS.get(duration_type, 30)
+    now = datetime.utcnow()
+    existing = get_subscriber_by_telegram_id(telegram_user_id)
+
+    if duration_type == "onetime":
+        new_expiry = LIFETIME_EXPIRY
+    elif existing and existing.get("expiry_date") and existing["expiry_date"] > now.isoformat() and existing["status"] == "active":
+        base = datetime.fromisoformat(existing["expiry_date"])
+        new_expiry = (base + timedelta(days=days)).isoformat()
+    else:
+        new_expiry = (now + timedelta(days=days)).isoformat()
+
+    conn = get_conn()
+    if existing:
+        conn.execute(
+            "UPDATE subscribers SET telegram_username=?, button_text=?, duration_type=?, price=?, "
+            "status='active', expiry_date=?, provider=?, purchase_count=purchase_count+1, link_sent=0 "
+            "WHERE telegram_user_id=?",
+            (telegram_username or "", button_text, duration_type, price, new_expiry, provider, str(telegram_user_id)),
+        )
+        sub_id = existing["id"]
+    else:
+        cur = conn.execute(
+            "INSERT INTO subscribers (telegram_user_id, telegram_username, panel_id, button_text, "
+            "duration_type, price, status, auto_renew, start_date, expiry_date, provider, "
+            "purchase_count, link_sent, created_at) "
+            "VALUES (?, ?, NULL, ?, ?, ?, 'active', 0, ?, ?, ?, 1, 0, ?)",
+            (str(telegram_user_id), telegram_username or "", button_text, duration_type, price,
+             now.isoformat(), new_expiry, provider, now.isoformat()),
+        )
+        sub_id = str(cur.lastrowid)
+    conn.commit()
+    conn.close()
+    return sub_id
+
+
+# kept for compatibility; no longer used by bot.py (see apply_purchase)
+def create_pending_subscriber(telegram_user_id, telegram_username, panel_id, button_text, duration_type, price, provider):
+    return apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider)
 
 
 # ---------------------------------------------------------------- panels --
@@ -338,21 +427,6 @@ def record_payment_failed(telegram_user_id, provider, failure_reason, subscriber
 
 
 # --------------------------------------------------------- bot-side ops --
-
-def create_pending_subscriber(telegram_user_id, telegram_username, panel_id, button_text, duration_type, price, provider):
-    conn = get_conn()
-    cur = conn.execute(
-        "INSERT INTO subscribers (telegram_user_id, telegram_username, panel_id, button_text, "
-        "duration_type, price, status, auto_renew, start_date, provider, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)",
-        (str(telegram_user_id), telegram_username or "", int(panel_id) if panel_id else None, button_text,
-         duration_type, price, datetime.utcnow().isoformat(), provider, datetime.utcnow().isoformat()),
-    )
-    conn.commit()
-    new_id = cur.lastrowid
-    conn.close()
-    return str(new_id)
-
 
 def get_expiring_subscribers(reminder_days):
     soon = (datetime.utcnow() + timedelta(days=reminder_days)).isoformat()
