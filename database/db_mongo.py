@@ -218,7 +218,8 @@ def get_latest_pending_subscriber(telegram_user_id):
 
 
 def update_subscriber(sub_id, fields):
-    allowed = ["status", "auto_renew", "expiry_date", "telegram_username", "link_sent"]
+    allowed = ["status", "auto_renew", "expiry_date", "telegram_username", "link_sent",
+               "button_text", "duration_type", "price", "purchase_count", "custom_days"]
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
         return False

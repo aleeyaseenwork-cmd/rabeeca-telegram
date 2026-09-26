@@ -34,7 +34,7 @@ dal.init_db()
 
 CSV_FIELDS = [
     "id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
-    "price", "currency", "status", "auto_renew", "purchase_count", "link_sent",
+    "custom_days", "price", "currency", "status", "auto_renew", "purchase_count", "link_sent",
     "start_date", "expiry_date", "provider", "last_payment_status",
 ]
 
@@ -138,9 +138,15 @@ def api_subscribers():
 @login_required
 def api_update_subscriber(sub_id):
     data = request.get_json(force=True)
+    kick_now = bool(data.pop("kick_now", False))
+
     ok = dal.update_subscriber(sub_id, data)
     if not ok:
         return jsonify({"error": "nothing to update"}), 400
+
+    if kick_now and data.get("status") == "expired":
+        _kick_member(sub_id)
+
     return jsonify({"ok": True})
 
 
@@ -352,6 +358,28 @@ def stripe_webhook():
         dal.record_payment_failed(telegram_user_id, "stripe", "payment declined", subscriber_id=sub_id)
 
     return jsonify({"received": True})
+
+
+def _kick_member(sub_id):
+    """Removes a member from the group/channel right away (used when an
+    admin manually marks someone expired and ticks 'remove now')."""
+    if not BOT_TOKEN or not GROUP_CHAT_ID:
+        return
+    sub = dal.get_subscriber(sub_id)
+    if not sub:
+        return
+    try:
+        import asyncio
+        from telegram import Bot
+
+        async def _kick():
+            bot = Bot(token=BOT_TOKEN)
+            await bot.ban_chat_member(chat_id=GROUP_CHAT_ID, user_id=int(sub["telegram_user_id"]))
+            await bot.unban_chat_member(chat_id=GROUP_CHAT_ID, user_id=int(sub["telegram_user_id"]))
+
+        asyncio.run(_kick())
+    except Exception as e:
+        app.logger.warning("Could not remove %s from group: %s", sub["telegram_user_id"], e)
 
 
 def _notify_and_invite(telegram_user_id):

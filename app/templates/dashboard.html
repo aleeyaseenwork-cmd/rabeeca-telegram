@@ -6,7 +6,6 @@
 <title>{{ title }}</title>
 <link rel="stylesheet" href="/static/style.css">
 <script>
-  // apply saved theme before paint to avoid a flash of the wrong theme
   (function(){ var t = localStorage.getItem('theme'); if (t) document.documentElement.setAttribute('data-theme', t); })();
 </script>
 </head>
@@ -21,40 +20,40 @@
         </div>
         <div class="header-actions">
           <span class="last-updated">Updated <span id="currentDate"></span></span>
-          <button class="icon-btn" id="darkModeBtn" title="Toggle dark mode">🌙</button>
-          <button class="btn-outline" id="exportBtnHeader">⬇ Export Data</button>
-          <button class="btn-outline" id="importBtnHeader">⬆ Import Data</button>
-          <input type="file" id="importFileInput" accept=".csv" hidden>
-          <button class="btn-outline" id="settingsBtn">⚙ Settings</button>
-          <a href="/logout" class="btn-outline">Log out</a>
+          <button class="icon-btn" id="refreshBtn" title="Refresh"><svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.95 7.95 0 0 0 12 4a8 8 0 1 0 7.75 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></button>
+          <button class="icon-btn" id="darkModeBtn" title="Toggle dark mode"></button>
+          <button class="btn-outline" id="exportBtnHeader"><svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18-5 5h3v6h4V7h3l-5-5z" transform="rotate(180 12 12)"/></svg> Export Data</button>
+          <button class="btn-outline" id="importBtnHeader"><svg viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18-5 5h3v6h4V7h3l-5-5z"/></svg> Import Data</button>
+          <button class="btn-outline" id="settingsBtn"><svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.5.5 0 0 0-.6.22L1.66 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94L1.76 14.5a.5.5 0 0 0-.12.64l1.92 3.32c.14.24.44.34.68.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.28.27.42.5.42h3.84c.25 0 .46-.14.5-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.25.1.54 0 .68-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.01-1.56zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg> Settings</button>
+          <a href="/logout" class="btn-outline"><svg viewBox="0 0 24 24"><path d="M16 13v-2H7V8l-5 4 5 4v-3z"/><path d="M20 3h-9c-1.1 0-2 .9-2 2v4h2V5h9v14h-9v-4H9v4c0 1.1.9 2 2 2h9c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg> Log out</a>
         </div>
       </div>
     </header>
 
     <div class="stat-cards">
       <div class="stat-card">
-        <div class="stat-icon stat-icon-violet">💰</div>
+        <div class="stat-icon stat-icon-violet"><svg viewBox="0 0 24 24"><path d="M12 1a11 11 0 1 0 11 11A11 11 0 0 0 12 1zm.5 17.5h-1v-1.1a3.4 3.4 0 0 1-2.6-1.5l1-.8a2.4 2.4 0 0 0 2.1 1.2c1 0 1.7-.5 1.7-1.3s-.6-1.1-1.9-1.5c-1.7-.5-2.6-1.1-2.6-2.5 0-1.2.9-2.1 2.3-2.3V7.5h1v1a3 3 0 0 1 2.2 1.3l-1 .7a2 2 0 0 0-1.8-1c-.9 0-1.5.5-1.5 1.1 0 .7.6 1 1.9 1.4 1.9.6 2.6 1.3 2.6 2.6 0 1.3-1 2.2-2.4 2.4z"/></svg></div>
         <div>
           <span class="stat-label">Total Revenue</span>
           <span class="stat-value" id="statTotalRevenue">-</span>
         </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon stat-icon-green">📈</div>
+        <div class="stat-icon stat-icon-green"><svg viewBox="0 0 24 24"><path d="M16 6l2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg></div>
         <div>
           <span class="stat-label">This Month</span>
           <span class="stat-value" id="statMonthRevenue">-</span>
         </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon stat-icon-blue">👥</div>
+        <div class="stat-icon stat-icon-blue"><svg viewBox="0 0 24 24"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg></div>
         <div>
           <span class="stat-label">Active Subscribers</span>
           <span class="stat-value" id="statActiveSubs">-</span>
         </div>
       </div>
       <div class="stat-card">
-        <div class="stat-icon stat-icon-amber">⏰</div>
+        <div class="stat-icon stat-icon-amber"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm.5 5H11v6l5.2 3.2.8-1.3-4.5-2.7z"/></svg></div>
         <div>
           <span class="stat-label">Expiring in 3 Days</span>
           <span class="stat-value" id="statExpiringSoon">-</span>
@@ -72,7 +71,7 @@
       <section id="tab-subscribers" class="tab-panel active">
         <div class="toolbar">
           <div class="search-wrap">
-            <span class="search-icon">🔎</span>
+            <svg class="search-icon" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
             <input type="text" id="searchInput" placeholder="Search username or Telegram ID...">
           </div>
           <select id="statusFilter" class="pill-select pill-status">
@@ -86,6 +85,21 @@
             <option value="successful">Successful</option>
             <option value="pending">Pending</option>
             <option value="failed">Failed</option>
+          </select>
+          <select id="durationFilter" class="pill-select pill-duration">
+            <option value="">All durations</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+            <option value="onetime">Lifetime</option>
+            <option value="custom">Custom</option>
+          </select>
+          <select id="sortSelect" class="pill-select">
+            <option value="newest">Newest first</option>
+            <option value="oldest">Oldest first</option>
+            <option value="purchases_high">Purchases: high to low</option>
+            <option value="purchases_low">Purchases: low to high</option>
+            <option value="link_not_sent">Link not sent first</option>
+            <option value="expiring_soon">Expiring soonest</option>
           </select>
           <select id="pageSizeSelect" class="pill-select">
             <option value="20">20 / page</option>
@@ -130,7 +144,7 @@
       <section id="tab-plans" class="tab-panel">
         <div class="toolbar">
           <button id="newPanelBtn" class="btn-primary">+ New Panel</button>
-          <button id="devViewBtn" class="btn-outline">&lt;/&gt; Developer View</button>
+          <button id="devViewBtn" class="btn-outline"><svg viewBox="0 0 24 24"><path d="M9.4 16.6 4.8 12l4.6-4.6L8 6l-6 6 6 6zm5.2 0 4.6-4.6-4.6-4.6L16 6l6 6-6 6z"/></svg> Developer View</button>
         </div>
         <div id="panelsList" class="panels-list"></div>
       </section>
@@ -174,13 +188,112 @@
     </div>
   </div>
 
-  <!-- Row details modal (eye icon) -->
+  <!-- Row details modal (eye icon, read-only) -->
   <div id="viewModal" class="modal hidden">
     <div class="modal-box">
       <h2>Subscriber Details</h2>
       <div id="viewModalBody" class="view-details"></div>
       <div class="modal-actions">
         <button id="viewCloseBtn" class="secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit subscriber modal (pencil icon, full editable form) -->
+  <div id="editModal" class="modal hidden">
+    <div class="modal-box">
+      <h2>Edit Subscriber</h2>
+
+      <div class="view-details" style="margin-bottom:12px">
+        <div class="vd-row"><span>User ID</span><strong id="editUserId"></strong></div>
+        <div class="vd-row"><span>Username</span><strong id="editUsername"></strong></div>
+      </div>
+
+      <label>Plan</label>
+      <select id="editPlanSelect"></select>
+
+      <div id="editCustomPlanFields" class="hidden">
+        <label>Custom plan name</label>
+        <input type="text" id="editCustomName" placeholder="e.g. Demo Access">
+      </div>
+
+      <label>Price</label>
+      <input type="number" id="editPrice" step="0.01">
+
+      <label>Duration</label>
+      <select id="editDurationSelect">
+        <option value="weekly">Weekly (7 days)</option>
+        <option value="monthly">Monthly (30 days)</option>
+        <option value="onetime">Lifetime</option>
+        <option value="custom">Custom days</option>
+      </select>
+
+      <div id="editCustomDaysField" class="hidden">
+        <label>Number of days</label>
+        <input type="number" id="editCustomDays" min="1" value="1">
+      </div>
+
+      <label>Expiry date <span class="hint">(auto-fills from duration above, or set manually)</span></label>
+      <input type="date" id="editExpiryDate">
+
+      <label>Status</label>
+      <select id="editStatusSelect">
+        <option value="active">Active</option>
+        <option value="expired">Expired</option>
+        <option value="cancelled">Cancelled</option>
+      </select>
+
+      <div id="editKickField" class="hidden">
+        <label class="checkbox-label">
+          <input type="checkbox" id="editKickNow">
+          Also remove from the group/channel now
+        </label>
+        <p class="hint">Unchecked by default. Only applies when status is set to Expired.</p>
+      </div>
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="editAutoRenew">
+        Auto-renew
+      </label>
+
+      <label>Purchases made</label>
+      <input type="number" id="editPurchaseCount" min="0">
+
+      <label class="checkbox-label">
+        <input type="checkbox" id="editLinkSent">
+        Invite link sent
+      </label>
+
+      <div class="view-details" style="margin-top:12px">
+        <div class="vd-row"><span>Last payment</span><strong id="editLastPayment">-</strong></div>
+      </div>
+
+      <div class="modal-actions">
+        <button id="editCancelBtn" class="secondary">Cancel</button>
+        <button id="editSaveBtn" class="btn-primary">Save changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Import modal -->
+  <div id="importModal" class="modal hidden">
+    <div class="modal-box">
+      <h2>Import Subscribers</h2>
+      <p class="hint">
+        CSV only. Import from the "Subscribers" tab of your live Google Sheet (download it as CSV first),
+        or from a previous Export Data download. Required column: <strong>telegram_user_id</strong>.
+        Optional columns: telegram_username, button_text, duration_type, price, provider.
+        Existing users (matched by telegram_user_id) get updated; new ones are added.
+      </p>
+      <div id="dropZone" class="drop-zone">
+        <svg viewBox="0 0 24 24" width="32" height="32"><path d="M5 20h14v-2H5v2zm7-18-5 5h3v6h4V7h3l-5-5z"/></svg>
+        <p>Drag & drop a CSV file here, or click to browse</p>
+        <input type="file" id="importFileInput" accept=".csv" hidden>
+      </div>
+      <p class="hint" id="importFileName"></p>
+      <div class="modal-actions">
+        <button id="importCancelBtn" class="secondary">Cancel</button>
+        <button id="importConfirmBtn" class="btn-primary" disabled>Import</button>
       </div>
     </div>
   </div>
@@ -205,7 +318,7 @@
       <input type="number" id="settingReminderDays" min="0">
       <label class="checkbox-label">
         <input type="checkbox" id="settingAutoKick">
-        Auto-kick members on expiry
+        Auto-kick members on expiry (scheduled daily job)
       </label>
       <label>Admin Telegram IDs (one per line)</label>
       <textarea id="settingAdminIds" rows="3"></textarea>

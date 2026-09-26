@@ -31,7 +31,7 @@ CREDENTIALS_PATH = os.path.join(os.path.dirname(__file__), "google_service_accou
 
 SUBSCRIBER_HEADERS = [
     "id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
-    "price", "currency", "status", "auto_renew", "purchase_count", "link_sent",
+    "custom_days", "price", "currency", "status", "auto_renew", "purchase_count", "link_sent",
     "start_date", "expiry_date", "provider", "created_at",
 ]
 PAYMENT_HEADERS = [

@@ -71,6 +71,7 @@ def init_db():
     # migration for databases created before purchase_count/link_sent existed
     _add_column_if_missing(conn, "subscribers", "purchase_count INTEGER DEFAULT 0")
     _add_column_if_missing(conn, "subscribers", "link_sent INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "subscribers", "custom_days INTEGER")
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS payments (
@@ -269,7 +270,8 @@ def get_subscribers(status="", pay_status="", search="", page=1, page_size=30):
 
 
 def update_subscriber(sub_id, fields):
-    allowed = ["status", "auto_renew", "expiry_date", "telegram_username", "link_sent"]
+    allowed = ["status", "auto_renew", "expiry_date", "telegram_username", "link_sent",
+               "button_text", "duration_type", "price", "purchase_count", "custom_days"]
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
         return False
