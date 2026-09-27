@@ -108,9 +108,9 @@ body {
   align-items: center;
   justify-content: center;
 }
-.icon-btn svg { width: 18px; height: 18px; fill: var(--text); }
-.btn-outline svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
-.search-icon { width: 15px; height: 15px; fill: var(--text-muted); position: absolute; left: 12px; top: 50%; transform: translateY(-50%); }
+.icon-btn svg { width: 18px; height: 18px; fill: none; stroke: var(--text); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.btn-outline svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.search-icon { width: 15px; height: 15px; fill: none; stroke: var(--text-muted); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; position: absolute; left: 12px; top: 50%; transform: translateY(-50%); }
 .btn-outline {
   background: var(--surface);
   color: var(--text);
@@ -174,11 +174,17 @@ button.secondary {
   font-size: 19px;
   flex-shrink: 0;
 }
+.stat-icon svg { width: 20px; height: 20px; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .stat-icon-violet { background: var(--accent-soft); }
+.stat-icon-violet svg { stroke: var(--accent); }
 .stat-icon-green { background: var(--success-soft); }
+.stat-icon-green svg { stroke: var(--success); }
 .stat-icon-blue { background: #E3EEFD; }
+.stat-icon-blue svg { stroke: #2F6FE0; }
 :root[data-theme="dark"] .stat-icon-blue { background: #16283E; }
+:root[data-theme="dark"] .stat-icon-blue svg { stroke: #7DB2F6; }
 .stat-icon-amber { background: var(--pending-soft); }
+.stat-icon-amber svg { stroke: var(--pending); }
 .stat-label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 3px; }
 .stat-value { display: block; font-size: 22px; font-weight: 700; letter-spacing: -0.01em; }
 
@@ -277,8 +283,11 @@ tbody tr:hover { background: var(--surface-alt); }
 .badge.cancelled { background: var(--cancelled-soft); color: var(--cancelled); }
 .badge.weekly { background: #E3EEFD; color: #2F6FE0; }
 .badge.monthly { background: var(--accent-soft); color: var(--accent); }
+.badge.yearly { background: #E3F5E9; color: #1E9E5A; }
 .badge.onetime { background: var(--pending-soft); color: var(--pending); }
+.badge.custom { background: var(--cancelled-soft); color: var(--cancelled); }
 :root[data-theme="dark"] .badge.weekly { background: #16283E; color: #7DB2F6; }
+:root[data-theme="dark"] .badge.yearly { background: #10331F; color: #6FDB9C; }
 
 .link-yes { color: var(--success); font-weight: 600; }
 .link-no { color: var(--failed); font-weight: 600; }
@@ -288,11 +297,13 @@ tbody tr:hover { background: var(--surface-alt); }
   background: none;
   border: none;
   cursor: pointer;
-  font-size: 14px;
   padding: 5px 7px;
   border-radius: 6px;
   color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
 }
+.row-actions button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .row-actions button:hover { background: var(--accent-soft); color: var(--accent); }
 .row-menu {
   position: absolute;
@@ -428,9 +439,9 @@ tbody tr:hover { background: var(--surface-alt); }
   color: var(--text-muted);
   margin: 12px 0 4px;
 }
-.drop-zone svg { fill: var(--text-muted); margin-bottom: 8px; }
+.drop-zone svg { fill: none; stroke: var(--text-muted); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; margin-bottom: 8px; }
 .drop-zone.dragover { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-.drop-zone.dragover svg { fill: var(--accent); }
+.drop-zone.dragover svg { stroke: var(--accent); }
 .hidden { display: none !important; }
 
 @media (max-width: 720px) {

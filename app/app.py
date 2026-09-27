@@ -341,9 +341,10 @@ def stripe_webhook():
         duration_type = metadata.get("duration_type", "monthly")
         price = float(metadata.get("price", amount) or amount)
         telegram_username = metadata.get("telegram_username", "")
+        custom_days = int(metadata["custom_days"]) if metadata.get("custom_days") else None
 
         sub_id = dal.apply_purchase(
-            telegram_user_id, telegram_username, button_text, duration_type, price, "stripe",
+            telegram_user_id, telegram_username, button_text, duration_type, price, "stripe", custom_days,
         )
         dal.record_payment_success(telegram_user_id, amount, "stripe", session_obj.get("id", ""), subscriber_id=sub_id)
 

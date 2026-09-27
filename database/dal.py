@@ -126,13 +126,13 @@ def record_payment_failed(telegram_user_id, provider, failure_reason, subscriber
         log.warning("Could not mirror failed payment to Sheets: %s", e)
 
 
-def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider):
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None):
     """
     One row per Telegram user. First purchase creates it; buying again
     while active stacks the expiry forward; buying again after expiry
     starts fresh; lifetime always wins outright. See db.py/db_mongo.py.
     """
-    sub_id = _impl.apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider)
+    sub_id = _impl.apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days)
     try:
         row = _impl.get_subscriber(sub_id)
         if row:

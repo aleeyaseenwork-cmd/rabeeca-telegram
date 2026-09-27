@@ -39,7 +39,7 @@ stripe.api_key = STRIPE_SECRET_KEY
 dal.init_db()
 
 PROVIDER_LABELS = {"stripe": "Stripe", "ccbill": "CCBill", "paypal": "PayPal"}
-DURATION_LABELS = {"weekly": "week", "monthly": "month", "onetime": "lifetime"}
+DURATION_LABELS = {"weekly": "week", "monthly": "month", "yearly": "year", "onetime": "lifetime", "custom": "custom"}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,7 +161,12 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
     """
     if provider == "stripe":
         try:
-            is_subscription = plan["duration_type"] in ("weekly", "monthly")
+            # weekly/monthly/yearly are real recurring subscriptions;
+            # onetime (lifetime) and custom (arbitrary day count) are
+            # one-off payments — a custom N-day pass isn't something
+            # Stripe bills on a recurring cycle, so it's a single charge
+            # and the day count just controls how far out expiry is set.
+            is_subscription = plan["duration_type"] in ("weekly", "monthly", "yearly")
             line_item = {
                 "price_data": {
                     "currency": "usd",
@@ -171,7 +176,7 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
                 "quantity": 1,
             }
             if is_subscription:
-                interval = "week" if plan["duration_type"] == "weekly" else "month"
+                interval = {"weekly": "week", "monthly": "month", "yearly": "year"}[plan["duration_type"]]
                 line_item["price_data"]["recurring"] = {"interval": interval}
 
             session = stripe.checkout.Session.create(
@@ -183,6 +188,7 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
                     "telegram_username": telegram_username or "",
                     "button_text": plan["text"],
                     "duration_type": plan["duration_type"],
+                    "custom_days": str(plan.get("custom_days", "")) if plan["duration_type"] == "custom" else "",
                     "price": str(plan["price"]),
                 },
                 success_url=f"{DASHBOARD_URL}/checkout/success",

@@ -18,7 +18,7 @@ from pymongo import MongoClient
 _client = None
 _db = None
 
-DURATION_DAYS = {"weekly": 7, "monthly": 30, "onetime": 36500}
+DURATION_DAYS = {"weekly": 7, "monthly": 30, "yearly": 365, "onetime": 36500}
 LIFETIME_EXPIRY = (datetime(2126, 1, 1)).isoformat()
 
 
@@ -244,17 +244,18 @@ def export_subscribers(status="", pay_status="", search=""):
     return result["rows"]
 
 
-def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider):
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None):
     """
     The one place purchase logic happens. Creates the subscriber document on
     a first-ever purchase, or extends/stacks the existing one on a renewal:
     - lifetime (onetime) always wins outright, regardless of prior state
     - buying again while still active extends the current expiry forward
     - buying again after expiry (or first time) starts fresh from now
+    - duration_type "custom" uses custom_days instead of the fixed table
     Returns the subscriber's id (str).
     """
     db = _get_db()
-    days = DURATION_DAYS.get(duration_type, 30)
+    days = custom_days if (duration_type == "custom" and custom_days) else DURATION_DAYS.get(duration_type, 30)
     now = datetime.utcnow()
     existing = get_subscriber_by_telegram_id(telegram_user_id)
 
@@ -274,6 +275,7 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
                     "telegram_username": telegram_username or "",
                     "button_text": button_text,
                     "duration_type": duration_type,
+                    "custom_days": custom_days,
                     "price": price,
                     "status": "active",
                     "expiry_date": new_expiry,
@@ -288,6 +290,7 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
         res = db.subscribers.insert_one({
             "telegram_user_id": str(telegram_user_id), "telegram_username": telegram_username or "",
             "panel_id": None, "button_text": button_text, "duration_type": duration_type,
+            "custom_days": custom_days,
             "price": price, "currency": "USD", "status": "active", "auto_renew": 0,
             "start_date": now.isoformat(), "expiry_date": new_expiry, "provider": provider,
             "purchase_count": 1, "link_sent": 0, "created_at": now.isoformat(),

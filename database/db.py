@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
 
-DURATION_DAYS = {"weekly": 7, "monthly": 30, "onetime": 36500}  # ~100yr for lifetime
+DURATION_DAYS = {"weekly": 7, "monthly": 30, "yearly": 365, "onetime": 36500}  # ~100yr for lifetime
 LIFETIME_EXPIRY = (datetime(2126, 1, 1)).isoformat()
 
 
@@ -303,16 +303,17 @@ def export_subscribers(status="", pay_status="", search=""):
     return result["rows"]
 
 
-def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider):
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None):
     """
     The one place purchase logic happens. Creates the subscriber row on a
     first-ever purchase, or extends/stacks the existing one on a renewal:
     - lifetime (onetime) always wins outright, regardless of prior state
     - buying again while still active extends the current expiry forward
     - buying again after expiry (or first time) starts fresh from now
+    - duration_type "custom" uses custom_days instead of the fixed table
     Returns the subscriber's id (str).
     """
-    days = DURATION_DAYS.get(duration_type, 30)
+    days = custom_days if (duration_type == "custom" and custom_days) else DURATION_DAYS.get(duration_type, 30)
     now = datetime.utcnow()
     existing = get_subscriber_by_telegram_id(telegram_user_id)
 
@@ -327,19 +328,19 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
     conn = get_conn()
     if existing:
         conn.execute(
-            "UPDATE subscribers SET telegram_username=?, button_text=?, duration_type=?, price=?, "
+            "UPDATE subscribers SET telegram_username=?, button_text=?, duration_type=?, custom_days=?, price=?, "
             "status='active', expiry_date=?, provider=?, purchase_count=purchase_count+1, link_sent=0 "
             "WHERE telegram_user_id=?",
-            (telegram_username or "", button_text, duration_type, price, new_expiry, provider, str(telegram_user_id)),
+            (telegram_username or "", button_text, duration_type, custom_days, price, new_expiry, provider, str(telegram_user_id)),
         )
         sub_id = existing["id"]
     else:
         cur = conn.execute(
             "INSERT INTO subscribers (telegram_user_id, telegram_username, panel_id, button_text, "
-            "duration_type, price, status, auto_renew, start_date, expiry_date, provider, "
+            "duration_type, custom_days, price, status, auto_renew, start_date, expiry_date, provider, "
             "purchase_count, link_sent, created_at) "
-            "VALUES (?, ?, NULL, ?, ?, ?, 'active', 0, ?, ?, ?, 1, 0, ?)",
-            (str(telegram_user_id), telegram_username or "", button_text, duration_type, price,
+            "VALUES (?, ?, NULL, ?, ?, ?, ?, 'active', 0, ?, ?, ?, 1, 0, ?)",
+            (str(telegram_user_id), telegram_username or "", button_text, duration_type, custom_days, price,
              now.isoformat(), new_expiry, provider, now.isoformat()),
         )
         sub_id = str(cur.lastrowid)

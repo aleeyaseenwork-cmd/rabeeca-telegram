@@ -1,6 +1,6 @@
 // ---------- icons (dark mode toggle swaps these two) ----------
-const ICON_SUN = '<svg viewBox="0 0 24 24"><path d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0-5a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1zm0 18a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1zM4 11a1 1 0 0 1 0 2H2a1 1 0 1 1 0-2h2zm18 0a1 1 0 0 1 0 2h-2a1 1 0 1 1 0-2h2zM5.6 4.2a1 1 0 0 1 1.4 0l1.4 1.4a1 1 0 1 1-1.4 1.4L5.6 5.6a1 1 0 0 1 0-1.4zm11 11a1 1 0 0 1 1.4 0l1.4 1.4a1 1 0 0 1-1.4 1.4l-1.4-1.4a1 1 0 0 1 0-1.4zm1.4-12.4a1 1 0 0 1 0 1.4l-1.4 1.4a1 1 0 1 1-1.4-1.4l1.4-1.4a1 1 0 0 1 1.4 0zm-11 11a1 1 0 0 1 0 1.4L5.6 18.4A1 1 0 1 1 4.2 17l1.4-1.4a1 1 0 0 1 1.4 0z"/></svg>';
-const ICON_MOON = '<svg viewBox="0 0 24 24"><path d="M12.7 2a9.5 9.5 0 1 0 9.3 11.4 8 8 0 0 1-9.3-11.4z"/></svg>';
+const ICON_SUN = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+const ICON_MOON = '<svg viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
 
 function applyTheme(theme) {
   document.documentElement.setAttribute('data-theme', theme);
@@ -130,9 +130,9 @@ function renderSubsTable(rows) {
   });
 }
 
-const ICON_EYE = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 5c-5 0-9.3 3.1-11 7 1.7 3.9 6 7 11 7s9.3-3.1 11-7c-1.7-3.9-6-7-11-7zm0 12a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>';
-const ICON_PENCIL = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>';
-const ICON_DOTS = '<svg viewBox="0 0 24 24" width="16" height="16"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 6a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg>';
+const ICON_EYE = '<svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+const ICON_PENCIL = '<svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+const ICON_DOTS = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="5" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.8" fill="currentColor" stroke="none"/></svg>';
 
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".row-actions")) {
@@ -240,7 +240,7 @@ function escapeHtml(str) {
 
 // ---------- edit subscriber modal ----------
 let editingSubId = null;
-const DURATION_DAYS = { weekly: 7, monthly: 30, onetime: null }; // onetime = lifetime, no days
+const DURATION_DAYS = { weekly: 7, monthly: 30, yearly: 365, onetime: null }; // onetime = lifetime, no days
 
 function populatePlanOptions(selectedPlanValue) {
   const sel = document.getElementById("editPlanSelect");
@@ -488,10 +488,10 @@ function editPanel(p) {
 function renderButtonsEditor(buttons) {
   const editor = document.getElementById("buttonsEditor");
   editor.innerHTML = "";
-  buttons.forEach(b => addButtonRow(b.text, b.price, b.duration_type));
+  buttons.forEach(b => addButtonRow(b.text, b.price, b.duration_type, b.custom_days));
 }
 
-function addButtonRow(text = "", price = 0, duration = "monthly") {
+function addButtonRow(text = "", price = 0, duration = "monthly", customDays = null) {
   const row = document.createElement("div");
   row.className = "button-row";
   row.innerHTML = `
@@ -500,10 +500,18 @@ function addButtonRow(text = "", price = 0, duration = "monthly") {
     <select class="btn-duration">
       <option value="weekly" ${duration === "weekly" ? "selected" : ""}>Weekly</option>
       <option value="monthly" ${duration === "monthly" ? "selected" : ""}>Monthly</option>
-      <option value="onetime" ${duration === "onetime" ? "selected" : ""}>One-time</option>
+      <option value="yearly" ${duration === "yearly" ? "selected" : ""}>Yearly</option>
+      <option value="onetime" ${duration === "onetime" ? "selected" : ""}>Lifetime</option>
+      <option value="custom" ${duration === "custom" ? "selected" : ""}>Custom days</option>
     </select>
+    <input type="number" class="btn-custom-days" placeholder="Days" min="1" value="${customDays || 30}" style="width:70px" ${duration === "custom" ? "" : "hidden"}>
     <button type="button" class="remove-btn" onclick="this.parentElement.remove()">✕</button>
   `;
+  const durationSel = row.querySelector(".btn-duration");
+  const daysInput = row.querySelector(".btn-custom-days");
+  durationSel.addEventListener("change", () => {
+    daysInput.hidden = durationSel.value !== "custom";
+  });
   document.getElementById("buttonsEditor").appendChild(row);
 }
 
@@ -513,11 +521,18 @@ document.getElementById("panelCancelBtn").addEventListener("click", closePanelMo
 document.getElementById("panelSaveBtn").addEventListener("click", async () => {
   const name = document.getElementById("panelName").value.trim() || "Untitled Panel";
   const message_text = document.getElementById("panelMessage").value.trim();
-  const buttons = Array.from(document.querySelectorAll("#buttonsEditor .button-row")).map(row => ({
-    text: row.querySelector(".btn-text").value.trim(),
-    price: parseFloat(row.querySelector(".btn-price").value) || 0,
-    duration_type: row.querySelector(".btn-duration").value,
-  }));
+  const buttons = Array.from(document.querySelectorAll("#buttonsEditor .button-row")).map(row => {
+    const duration_type = row.querySelector(".btn-duration").value;
+    const btn = {
+      text: row.querySelector(".btn-text").value.trim(),
+      price: parseFloat(row.querySelector(".btn-price").value) || 0,
+      duration_type,
+    };
+    if (duration_type === "custom") {
+      btn.custom_days = parseInt(row.querySelector(".btn-custom-days").value, 10) || 30;
+    }
+    return btn;
+  });
 
   if (editingPanelId) {
     await fetch(`/api/panels/${editingPanelId}`, {
