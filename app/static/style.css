@@ -284,10 +284,14 @@ tbody tr:hover { background: var(--surface-alt); }
 .badge.weekly { background: #E3EEFD; color: #2F6FE0; }
 .badge.monthly { background: var(--accent-soft); color: var(--accent); }
 .badge.yearly { background: #E3F5E9; color: #1E9E5A; }
+.badge.quarterly { background: #FDE9F3; color: #C2338A; }
+.badge.semiannual { background: #E9E7FD; color: #5B4FD6; }
 .badge.onetime { background: var(--pending-soft); color: var(--pending); }
 .badge.custom { background: var(--cancelled-soft); color: var(--cancelled); }
 :root[data-theme="dark"] .badge.weekly { background: #16283E; color: #7DB2F6; }
 :root[data-theme="dark"] .badge.yearly { background: #10331F; color: #6FDB9C; }
+:root[data-theme="dark"] .badge.quarterly { background: #3A1730; color: #F090C9; }
+:root[data-theme="dark"] .badge.semiannual { background: #221E3F; color: #B0A8F5; }
 
 .link-yes { color: var(--success); font-weight: 600; }
 .link-no { color: var(--failed); font-weight: 600; }

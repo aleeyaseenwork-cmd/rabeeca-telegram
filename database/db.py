@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
 
-DURATION_DAYS = {"weekly": 7, "monthly": 30, "yearly": 365, "onetime": 36500}  # ~100yr for lifetime
+DURATION_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90, "semiannual": 180, "yearly": 365, "onetime": 36500}  # ~100yr for lifetime
 LIFETIME_EXPIRY = (datetime(2126, 1, 1)).isoformat()
 
 
@@ -109,6 +109,7 @@ def init_db():
         "active_providers": "stripe",
         "reminder_days_before": "3",
         "auto_kick_on_expiry": "0",
+        "auto_billing_enabled": "1",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))

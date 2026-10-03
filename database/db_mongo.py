@@ -18,7 +18,7 @@ from pymongo import MongoClient
 _client = None
 _db = None
 
-DURATION_DAYS = {"weekly": 7, "monthly": 30, "yearly": 365, "onetime": 36500}
+DURATION_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90, "semiannual": 180, "yearly": 365, "onetime": 36500}
 LIFETIME_EXPIRY = (datetime(2126, 1, 1)).isoformat()
 
 
@@ -89,6 +89,7 @@ def init_db():
         "active_providers": "stripe",
         "reminder_days_before": "3",
         "auto_kick_on_expiry": "0",
+        "auto_billing_enabled": "1",
     }
     for k, v in defaults.items():
         db.settings.update_one({"key": k}, {"$setOnInsert": {"value": v}}, upsert=True)

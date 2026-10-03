@@ -9,6 +9,7 @@ import os
 import sys
 import csv
 import io
+import hashlib
 from functools import wraps
 
 from flask import (
@@ -29,6 +30,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-env")
 DASHBOARD_PASSWORD_ENV = os.environ.get("DASHBOARD_PASSWORD", "changeme")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
+VEROTEL_SIGNATURE_KEY = os.environ.get("VEROTEL_SIGNATURE_KEY", "")
 
 dal.init_db()
 
@@ -359,6 +361,62 @@ def stripe_webhook():
         dal.record_payment_failed(telegram_user_id, "stripe", "payment declined", subscriber_id=sub_id)
 
     return jsonify({"received": True})
+
+
+def _verotel_signature(params):
+    """Same algorithm as bot/bot.py's verotel_signature — duplicated here
+    (rather than imported) so the dashboard process and the bot process
+    stay independent of each other."""
+    parts = [f"{k}={v}" for k, v in sorted(params.items()) if k != "signature"]
+    base = VEROTEL_SIGNATURE_KEY + ":" + ":".join(parts)
+    return hashlib.sha1(base.encode()).hexdigest()
+
+
+@app.route("/webhook/verotel", methods=["GET", "POST"])
+def verotel_webhook():
+    """
+    Receives Verotel/CardBilling (FlexPay) postbacks. Verotel sends these
+    as a GET (or sometimes POST) request to the Postback URL configured in
+    their Control Center for your shop — set it to:
+        https://your-domain.com/webhook/verotel
+
+    Every postback carries the same custom1/2/3 fields the checkout link
+    was built with (telegram user id, duration type, custom days), plus a
+    signature we verify before trusting anything in the request.
+    """
+    data = request.values.to_dict()
+    received_sig = data.pop("signature", "")
+
+    if not VEROTEL_SIGNATURE_KEY or _verotel_signature(data) != received_sig:
+        app.logger.warning("Verotel postback with invalid/missing signature")
+        return "invalid signature", 400
+
+    sale_type = data.get("type", "")
+    telegram_user_id = data.get("custom1", "unknown")
+    telegram_username = ""  # Verotel doesn't carry this back; already on file from the first purchase
+    duration_type = data.get("custom2", "monthly")
+    custom_days = int(data["custom3"]) if data.get("custom3") else None
+    amount = float(data.get("priceAmount", 0) or 0)
+    sale_id = data.get("saleID", "")
+
+    # "purchase"/"subscription" = first charge, "rebill" = a recurring
+    # subscription auto-charging again — both activate/extend the user
+    if sale_type in ("purchase", "subscription", "rebill", "sale"):
+        sub_id = dal.apply_purchase(
+            telegram_user_id, telegram_username, data.get("description", "CardBilling plan"),
+            duration_type, amount, "verotel", custom_days,
+        )
+        dal.record_payment_success(telegram_user_id, amount, "verotel", sale_id, subscriber_id=sub_id)
+        sent = _notify_and_invite(telegram_user_id)
+        dal.update_subscriber(sub_id, {"link_sent": 1 if sent else 0})
+
+    # "cancel"/"stop" = subscription cancelled, "chargeback"/"decline"/"expiry" = failed/ended
+    elif sale_type in ("cancel", "stop", "chargeback", "decline", "expiry"):
+        existing = dal.get_subscriber_by_telegram_id(telegram_user_id)
+        sub_id = existing["id"] if existing else None
+        dal.record_payment_failed(telegram_user_id, "verotel", sale_type, subscriber_id=sub_id)
+
+    return "OK"
 
 
 def _kick_member(sub_id):

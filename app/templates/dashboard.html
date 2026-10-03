@@ -90,6 +90,8 @@
             <option value="">All durations</option>
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
+            <option value="quarterly">3 Months</option>
+            <option value="semiannual">6 Months</option>
             <option value="yearly">Yearly</option>
             <option value="onetime">Lifetime</option>
             <option value="custom">Custom</option>
@@ -182,9 +184,10 @@
         <option value="admins">admins</option>
       </select>
       <textarea id="devJson" rows="18"></textarea>
-      <p class="hint">Read-only preview. Edit plans through the Plans tab; this is for quickly copying data into ChatGPT/Claude.</p>
+      <p class="hint" id="devHint">Read-only preview. Edit plans through the Plans tab; this is for quickly copying data into ChatGPT/Claude.</p>
       <div class="modal-actions">
         <button id="devCloseBtn" class="secondary">Close</button>
+        <button id="devSaveBtn" class="btn-primary hidden">Save changes</button>
       </div>
     </div>
   </div>
@@ -225,6 +228,8 @@
       <select id="editDurationSelect">
         <option value="weekly">Weekly (7 days)</option>
         <option value="monthly">Monthly (30 days)</option>
+        <option value="quarterly">3 Months (90 days)</option>
+        <option value="semiannual">6 Months (180 days)</option>
         <option value="yearly">Yearly (365 days)</option>
         <option value="onetime">Lifetime</option>
         <option value="custom">Custom days</option>
@@ -315,6 +320,9 @@
       <label class="checkbox-label">
         <input type="checkbox" id="providerCcbill" value="ccbill"> CCBill
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="providerVerotel" value="verotel"> CardBilling (Verotel)
+      </label>
       <p class="hint">If more than one is active, the bot will ask the buyer which one to pay with.</p>
       <label>Reminder days before expiry</label>
       <input type="number" id="settingReminderDays" min="0">
@@ -322,6 +330,11 @@
         <input type="checkbox" id="settingAutoKick">
         Auto-kick members on expiry (scheduled daily job)
       </label>
+      <label class="checkbox-label">
+        <input type="checkbox" id="settingAutoBilling">
+        Auto-rebill subscriptions (weekly/monthly/3mo/6mo/yearly auto-charge the card each period)
+      </label>
+      <p class="hint">Off: every plan becomes a single charge, buyers must repay manually (reminders still send). On: Stripe/CardBilling automatically re-charge the card each period, like a normal subscription.</p>
       <label>Admin Telegram IDs (one per line)</label>
       <textarea id="settingAdminIds" rows="3"></textarea>
 

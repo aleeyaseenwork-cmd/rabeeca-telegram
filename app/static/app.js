@@ -240,7 +240,7 @@ function escapeHtml(str) {
 
 // ---------- edit subscriber modal ----------
 let editingSubId = null;
-const DURATION_DAYS = { weekly: 7, monthly: 30, yearly: 365, onetime: null }; // onetime = lifetime, no days
+const DURATION_DAYS = { weekly: 7, monthly: 30, quarterly: 90, semiannual: 180, yearly: 365, onetime: null }; // onetime = lifetime, no days
 
 function populatePlanOptions(selectedPlanValue) {
   const sel = document.getElementById("editPlanSelect");
@@ -500,6 +500,8 @@ function addButtonRow(text = "", price = 0, duration = "monthly", customDays = n
     <select class="btn-duration">
       <option value="weekly" ${duration === "weekly" ? "selected" : ""}>Weekly</option>
       <option value="monthly" ${duration === "monthly" ? "selected" : ""}>Monthly</option>
+      <option value="quarterly" ${duration === "quarterly" ? "selected" : ""}>3 Months</option>
+      <option value="semiannual" ${duration === "semiannual" ? "selected" : ""}>6 Months</option>
       <option value="yearly" ${duration === "yearly" ? "selected" : ""}>Yearly</option>
       <option value="onetime" ${duration === "onetime" ? "selected" : ""}>Lifetime</option>
       <option value="custom" ${duration === "custom" ? "selected" : ""}>Custom days</option>
@@ -566,7 +568,66 @@ async function loadDevTable() {
   const res = await fetch(`/api/dev/table/${table}`);
   const data = await res.json();
   document.getElementById("devJson").value = JSON.stringify(data, null, 2);
+
+  const isPanels = table === "panels";
+  document.getElementById("devSaveBtn").classList.toggle("hidden", !isPanels);
+  document.getElementById("devHint").textContent = isPanels
+    ? "Edit the JSON directly and click Save — this fully replaces your panels (packages/buttons) with whatever's in the box, including adding or removing panels."
+    : "Read-only preview. This is for quickly copying data into ChatGPT/Claude.";
 }
+
+document.getElementById("devSaveBtn").addEventListener("click", async () => {
+  let parsed;
+  try {
+    parsed = JSON.parse(document.getElementById("devJson").value);
+  } catch (e) {
+    alert("That's not valid JSON: " + e.message);
+    return;
+  }
+  if (!Array.isArray(parsed)) {
+    alert("Panels JSON must be an array of panel objects.");
+    return;
+  }
+
+  const existingRes = await fetch("/api/panels");
+  const existing = await existingRes.json();
+  const existingIds = new Set(existing.map(p => p.id));
+  const newIds = new Set(parsed.filter(p => p.id).map(p => p.id));
+
+  // remove panels that were deleted from the JSON
+  for (const id of existingIds) {
+    if (!newIds.has(id)) {
+      await fetch(`/api/panels/${id}`, { method: "DELETE" });
+    }
+  }
+
+  // create or update every panel in the JSON
+  for (const p of parsed) {
+    const body = {
+      name: p.name || "Untitled Panel",
+      message_text: p.message_text || "",
+      buttons: p.buttons || [],
+      active: p.active !== undefined ? p.active : 1,
+    };
+    if (p.id && existingIds.has(p.id)) {
+      await fetch(`/api/panels/${p.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await fetch("/api/panels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+  }
+
+  alert("Panels saved.");
+  loadDevTable();
+  if (document.getElementById("tab-plans").classList.contains("active")) loadPanels();
+});
 
 // ---------- settings ----------
 document.getElementById("settingsBtn").addEventListener("click", async () => {
@@ -577,8 +638,10 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
   const activeProviders = (s.active_providers || "stripe").split(",").map(p => p.trim());
   document.getElementById("providerStripe").checked = activeProviders.includes("stripe");
   document.getElementById("providerCcbill").checked = activeProviders.includes("ccbill");
+  document.getElementById("providerVerotel").checked = activeProviders.includes("verotel");
   document.getElementById("settingReminderDays").value = s.reminder_days_before || 3;
   document.getElementById("settingAutoKick").checked = s.auto_kick_on_expiry === "1";
+  document.getElementById("settingAutoBilling").checked = s.auto_billing_enabled !== "0";
   document.getElementById("settingAdminIds").value = (s.admin_ids || []).join("\n");
   document.getElementById("currentPasswordInput").value = "";
   document.getElementById("newPasswordInput").value = "";
@@ -594,6 +657,7 @@ document.getElementById("settingsSaveBtn").addEventListener("click", async () =>
   const providers = [];
   if (document.getElementById("providerStripe").checked) providers.push("stripe");
   if (document.getElementById("providerCcbill").checked) providers.push("ccbill");
+  if (document.getElementById("providerVerotel").checked) providers.push("verotel");
   await fetch("/api/settings", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -603,6 +667,7 @@ document.getElementById("settingsSaveBtn").addEventListener("click", async () =>
       active_providers: providers.join(","),
       reminder_days_before: document.getElementById("settingReminderDays").value,
       auto_kick_on_expiry: document.getElementById("settingAutoKick").checked ? "1" : "0",
+      auto_billing_enabled: document.getElementById("settingAutoBilling").checked ? "1" : "0",
       admin_ids,
     }),
   });

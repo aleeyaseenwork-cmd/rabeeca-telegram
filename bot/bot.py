@@ -13,7 +13,9 @@ Requires BOT_TOKEN, GROUP_CHAT_ID, STRIPE_SECRET_KEY in .env (see README).
 """
 import os
 import sys
+import hashlib
 import logging
+from urllib.parse import urlencode
 
 import stripe
 from dotenv import load_dotenv
@@ -34,12 +36,15 @@ GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5000")
 
+VEROTEL_SHOP_ID = os.environ.get("VEROTEL_SHOP_ID", "")
+VEROTEL_SIGNATURE_KEY = os.environ.get("VEROTEL_SIGNATURE_KEY", "")
+
 stripe.api_key = STRIPE_SECRET_KEY
 
 dal.init_db()
 
-PROVIDER_LABELS = {"stripe": "Stripe", "ccbill": "CCBill", "paypal": "PayPal"}
-DURATION_LABELS = {"weekly": "week", "monthly": "month", "yearly": "year", "onetime": "lifetime", "custom": "custom"}
+PROVIDER_LABELS = {"stripe": "Stripe", "ccbill": "CCBill", "verotel": "CardBilling", "paypal": "PayPal"}
+DURATION_LABELS = {"weekly": "week", "monthly": "month", "quarterly": "3 months", "semiannual": "6 months", "yearly": "year", "onetime": "lifetime", "custom": "custom"}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -147,26 +152,58 @@ async def _send_payment_link(query, chosen, provider):
     )
 
 
+STRIPE_RECURRING = {
+    "weekly": {"interval": "week", "interval_count": 1},
+    "monthly": {"interval": "month", "interval_count": 1},
+    "quarterly": {"interval": "month", "interval_count": 3},
+    "semiannual": {"interval": "month", "interval_count": 6},
+    "yearly": {"interval": "year", "interval_count": 1},
+}
+
+# ISO-8601 periods FlexPay (Verotel/CardBilling) expects for subscriptionType=recurring
+VEROTEL_PERIODS = {
+    "weekly": "P1W",
+    "monthly": "P1M",
+    "quarterly": "P3M",
+    "semiannual": "P6M",
+    "yearly": "P1Y",
+}
+
+
+def verotel_signature(signature_key, params):
+    """
+    FlexPay's signature: SHA-1 of "signatureKey:key1=val1:key2=val2:..."
+    with every param (excluding 'signature' itself) sorted alphabetically
+    by key. Used both when building a checkout link and when verifying an
+    incoming postback in app/app.py.
+    """
+    parts = [f"{k}={v}" for k, v in sorted(params.items()) if k != "signature"]
+    base = signature_key + ":" + ":".join(parts)
+    return hashlib.sha1(base.encode()).hexdigest()
+
+
 def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
     """
-    Builds the real payment link for the chosen plan. Stripe is fully wired
-    up (test or live key, whichever is in .env). CCBill/PayPal return a
-    placeholder until you wire up their SDKs the same way.
+    Builds the real payment link for the chosen plan. Stripe and
+    Verotel/CardBilling (FlexPay) are both fully wired up. CCBill/PayPal
+    return a placeholder until you wire up their SDKs the same way.
 
-    The plan details ride along as Stripe metadata (nothing is written to
-    the database yet) — the webhook in app/app.py reads that metadata once
-    payment is confirmed and applies the purchase there (new sub, or
-    stacking/renewal onto an existing one). client_reference_id carries
-    the Telegram user id so the webhook knows who to activate.
+    The "Auto-rebill subscriptions" dashboard setting controls whether
+    weekly/monthly/quarterly/semiannual/yearly plans actually recur
+    (auto-charge each period) or become a single one-off charge that
+    relies on the reminder job for renewal — same toggle, both providers.
+
+    The plan details ride along as metadata/custom fields (nothing is
+    written to the database yet) — the matching webhook in app/app.py
+    reads that back once payment is confirmed and applies the purchase
+    there (new sub, or stacking/renewal onto an existing one).
     """
+    auto_billing = dal.get_setting("auto_billing_enabled", "1") == "1"
+    custom_days = plan.get("custom_days", "") if plan["duration_type"] == "custom" else ""
+
     if provider == "stripe":
         try:
-            # weekly/monthly/yearly are real recurring subscriptions;
-            # onetime (lifetime) and custom (arbitrary day count) are
-            # one-off payments — a custom N-day pass isn't something
-            # Stripe bills on a recurring cycle, so it's a single charge
-            # and the day count just controls how far out expiry is set.
-            is_subscription = plan["duration_type"] in ("weekly", "monthly", "yearly")
+            is_subscription = auto_billing and plan["duration_type"] in STRIPE_RECURRING
             line_item = {
                 "price_data": {
                     "currency": "usd",
@@ -176,8 +213,7 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
                 "quantity": 1,
             }
             if is_subscription:
-                interval = {"weekly": "week", "monthly": "month", "yearly": "year"}[plan["duration_type"]]
-                line_item["price_data"]["recurring"] = {"interval": interval}
+                line_item["price_data"]["recurring"] = STRIPE_RECURRING[plan["duration_type"]]
 
             session = stripe.checkout.Session.create(
                 mode="subscription" if is_subscription else "payment",
@@ -188,7 +224,7 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
                     "telegram_username": telegram_username or "",
                     "button_text": plan["text"],
                     "duration_type": plan["duration_type"],
-                    "custom_days": str(plan.get("custom_days", "")) if plan["duration_type"] == "custom" else "",
+                    "custom_days": str(custom_days),
                     "price": str(plan["price"]),
                 },
                 success_url=f"{DASHBOARD_URL}/checkout/success",
@@ -198,6 +234,35 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
         except Exception as e:
             log.error("Stripe checkout session failed: %s", e)
             return None
+
+    elif provider == "verotel":
+        if not VEROTEL_SHOP_ID or not VEROTEL_SIGNATURE_KEY:
+            log.error("Verotel/CardBilling not configured: set VEROTEL_SHOP_ID and VEROTEL_SIGNATURE_KEY in .env")
+            return None
+        try:
+            is_subscription = auto_billing and plan["duration_type"] in VEROTEL_PERIODS
+            params = {
+                "shopID": VEROTEL_SHOP_ID,
+                "priceAmount": f"{plan['price']:.2f}",
+                "priceCurrency": "USD",
+                "version": "3.5",
+                "description": plan["text"][:255],
+                "custom1": str(telegram_user_id),
+                "custom2": plan["duration_type"],
+                "custom3": str(custom_days),
+                "type": "subscription" if is_subscription else "purchase",
+                "successURL": f"{DASHBOARD_URL}/checkout/success",
+            }
+            if is_subscription:
+                params["subscriptionType"] = "recurring"
+                params["period"] = VEROTEL_PERIODS[plan["duration_type"]]
+
+            params["signature"] = verotel_signature(VEROTEL_SIGNATURE_KEY, params)
+            return f"https://secure.verotel.com/startorder?{urlencode(params)}"
+        except Exception as e:
+            log.error("Verotel checkout link failed: %s", e)
+            return None
+
     elif provider == "ccbill":
         # TODO: wire up CCBill the same way once CCBILL_* env vars are set
         return f"{DASHBOARD_URL}/checkout/ccbill?ref={telegram_user_id}&price={plan['price']}"

@@ -144,37 +144,39 @@ Run both the dashboard and the bot at the same time, they share the same databas
 
 ---
 
-## 6. Payments setup (Stripe first)
+## 6. Payments setup
 
-The bot currently builds a placeholder checkout link (`build_checkout_link` in `bot/bot.py`) so you can test the full flow end to end before wiring real payments. To go live with Stripe:
+**Stripe** and **CardBilling (Verotel)** are both fully wired up and live-ready, no code changes needed, just add your real keys to `.env`. CCBill and PayPal are still placeholders (`build_checkout_link()` in `bot/bot.py` has a `TODO` where each one's SDK goes).
 
-1. In `bot/bot.py`, replace `build_checkout_link` with a real Stripe Checkout Session:
-   ```python
-   import stripe
-   stripe.api_key = STRIPE_SECRET_KEY
+### 6.1 Stripe
 
-   session = stripe.checkout.Session.create(
-       mode="subscription" if plan["duration_type"] != "onetime" else "payment",
-       line_items=[{"price_data": {
-           "currency": "usd",
-           "product_data": {"name": plan["text"]},
-           "unit_amount": int(plan["price"] * 100),
-           **({"recurring": {"interval": "week" if plan["duration_type"] == "weekly" else "month"}}
-              if plan["duration_type"] != "onetime" else {}),
-       }, "quantity": 1}],
-       client_reference_id=str(telegram_user_id),
-       success_url="https://yourdomain.com/success",
-       cancel_url="https://yourdomain.com/cancel",
-   )
-   return session.url
+1. Add your keys to `.env`: `STRIPE_SECRET_KEY` (test or live).
+2. In Stripe Dashboard → Developers → Webhooks, add an endpoint:
+   `https://your-domain.com/webhook/stripe`, sending `checkout.session.completed` and `checkout.session.async_payment_failed`.
+3. Copy the webhook's signing secret into `STRIPE_WEBHOOK_SECRET` in `.env`.
+4. In the dashboard's Settings, tick **Stripe** under Active payment providers.
+
+### 6.2 CardBilling (Verotel)
+
+CardBilling is one of Verotel's billing brands — this integrates with Verotel's **FlexPay** protocol directly (hosted checkout redirect + signed postbacks), not a Verotel-specific SDK.
+
+1. In your Verotel Control Center → **Setup Websites** → your shop → FlexPay options, grab:
+   - **Shop ID**
+   - **Signature Key**
+2. Add both to `.env`:
    ```
-2. In Stripe Dashboard → Developers → Webhooks, add an endpoint pointing to:
-   `https://yourdomain.com/webhook/stripe`
-3. Send the `checkout.session.completed` and `checkout.session.async_payment_failed` events.
-4. In `app/app.py`, the `stripe_webhook()` function already handles those two events and writes to the `payments` table — swap the placeholder JSON parsing for real signature verification with `stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)`.
-5. Once a payment succeeds, add the logic to invite the user to your group (`context.bot.create_chat_invite_link` / send them the invite) and flip their `subscribers.status` to `active` with an `expiry_date`.
+   VEROTEL_SHOP_ID=your-shop-id
+   VEROTEL_SIGNATURE_KEY=your-signature-key
+   ```
+3. In that same FlexPay options page, set the **Postback URL** to:
+   `https://your-domain.com/webhook/verotel`
+4. In the dashboard's Settings, tick **CardBilling (Verotel)** under Active payment providers.
 
-**Switching providers later:** the dashboard's Settings tab already has an "Active payment provider" dropdown (Stripe / PayPal / CCBill). `build_checkout_link()` in `bot/bot.py` reads this setting and branches accordingly, so you add the PayPal/CCBill equivalent of the Stripe block above whenever you're ready and it activates from the dashboard, no redeploy of the bot needed beyond that code addition.
+How it works: `build_checkout_link()` in `bot/bot.py` builds a signed redirect to `secure.verotel.com/startorder` with the plan's price, duration and the buyer's Telegram ID riding along as `custom1`/`custom2`/`custom3`. Verotel sends a signed postback to `/webhook/verotel` on every event — `purchase` (first charge), `rebill` (a recurring subscription auto-charging again, which stacks the expiry the same way a Stripe renewal does), and `cancel`/`chargeback`/`decline`/`expiry` for anything that didn't succeed. Every postback's signature is verified against `VEROTEL_SIGNATURE_KEY` before anything in it is trusted.
+
+**Auto-rebill toggle:** Settings has an "Auto-rebill subscriptions" checkbox (on by default) that applies to both Stripe and CardBilling at once. On: weekly/monthly/3-month/6-month/yearly plans are real recurring subscriptions that auto-charge each period. Off: every plan becomes a single charge instead — buyers have to repay manually when their reminder arrives, nothing gets auto-charged. Flip it anytime from the dashboard, no redeploy needed.
+
+**Multiple providers active at once:** if more than one provider is ticked in Settings, the bot asks the buyer "Pay with Stripe" / "Pay with CardBilling" before building the link; with just one ticked, it skips straight to payment.
 
 ---
 
