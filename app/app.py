@@ -29,10 +29,18 @@ app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-env")
 
 DASHBOARD_PASSWORD_ENV = os.environ.get("DASHBOARD_PASSWORD", "changeme")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
+GROUP_CHAT_ID_ENV = os.environ.get("GROUP_CHAT_ID", "")
 VEROTEL_SIGNATURE_KEY = os.environ.get("VEROTEL_SIGNATURE_KEY", "")
 
 dal.init_db()
+
+
+def _group_chat_id():
+    """The channel/group the bot manages. Set from Settings in the dashboard
+    (so the client controls it herself); the GROUP_CHAT_ID env var is only
+    a fallback for before anything has been saved there."""
+    return (dal.get_setting("group_chat_id", "") or "").strip() or GROUP_CHAT_ID_ENV
+
 
 CSV_FIELDS = [
     "id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
@@ -285,6 +293,20 @@ def api_get_settings():
 @login_required
 def api_set_settings():
     data = request.get_json(force=True)
+
+    # Plan button labels are free text ("1 Month - $25"), so when the currency
+    # symbol changes, carry the new symbol into them — otherwise prices on the
+    # buttons would keep showing the old currency.
+    old_symbol = dal.get_setting("currency_symbol", "$")
+    new_symbol = data.get("currency_symbol")
+    if new_symbol and new_symbol != old_symbol and old_symbol:
+        for panel in dal.get_panels():
+            buttons = panel.get("buttons", [])
+            for b in buttons:
+                b["text"] = b["text"].replace(old_symbol, new_symbol)
+            dal.update_panel(panel["id"], panel["name"], panel["message_text"].replace(old_symbol, new_symbol),
+                             buttons, panel.get("active", 1))
+
     for k, v in data.items():
         if k in ("admin_ids", "dashboard_password_hash"):
             continue
@@ -292,6 +314,145 @@ def api_set_settings():
     if "admin_ids" in data:
         dal.set_admin_ids(data["admin_ids"])
     return jsonify({"ok": True})
+
+
+# ------------------------------------------------------------ api: bans --
+
+@app.route("/api/bans", methods=["GET"])
+@login_required
+def api_get_bans():
+    return jsonify(dal.get_bans())
+
+
+@app.route("/api/bans", methods=["POST"])
+@login_required
+def api_ban_user():
+    """Ban by Telegram ID (usernames can be changed, IDs can't). Also cancels
+    any existing subscription for that ID and, if kick_now is set, removes
+    them from the group/channel right away."""
+    data = request.get_json(force=True)
+    tg_id = str(data.get("telegram_user_id", "")).strip()
+    if not tg_id.lstrip("-").isdigit():
+        return jsonify({"error": "Telegram ID must be a number"}), 400
+
+    dal.ban_user(tg_id, data.get("reason", ""))
+
+    existing = dal.get_subscriber_by_telegram_id(tg_id)
+    if existing:
+        dal.update_subscriber(existing["id"], {"status": "cancelled", "auto_renew": 0})
+        if data.get("kick_now"):
+            _kick_member(existing["id"])
+    return jsonify({"ok": True})
+
+
+@app.route("/api/bans/<telegram_user_id>", methods=["DELETE"])
+@login_required
+def api_unban_user(telegram_user_id):
+    dal.unban_user(telegram_user_id)
+    return jsonify({"ok": True})
+
+
+# --------------------------------------------------- api: revenue range --
+
+@app.route("/api/stats/revenue-range")
+@login_required
+def api_revenue_range():
+    """Revenue between two dates, both inclusive (YYYY-MM-DD)."""
+    from datetime import datetime, timedelta
+    start = request.args.get("start", "")
+    end = request.args.get("end", "")
+    try:
+        start_dt = datetime.strptime(start, "%Y-%m-%d")
+        end_dt = datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1)  # make end inclusive
+    except ValueError:
+        return jsonify({"error": "Use YYYY-MM-DD for both dates"}), 400
+    if end_dt <= start_dt:
+        return jsonify({"error": "End date must be on or after the start date"}), 400
+
+    result = dal.get_revenue_for_range(start_dt.isoformat(), end_dt.isoformat())
+    result["currency_symbol"] = dal.get_setting("currency_symbol", "$")
+    return jsonify(result)
+
+
+# ---------------------------------------------------- api: send reminders --
+
+def _send_reminder_message(sub):
+    """Sends one expiry reminder via the bot. Returns True if Telegram accepted it."""
+    if not BOT_TOKEN:
+        return False
+    try:
+        import asyncio
+        from telegram import Bot
+
+        expiry = (sub.get("expiry_date") or "")[:10]
+        text = (
+            f"⏰ *Reminder:* your *{sub.get('button_text', 'subscription')}* plan "
+            f"ends on *{expiry}*.\n\nSend /start to renew and keep your access."
+        )
+
+        async def _send():
+            await Bot(token=BOT_TOKEN).send_message(
+                chat_id=int(sub["telegram_user_id"]), text=text, parse_mode="Markdown",
+            )
+
+        asyncio.run(_send())
+        return True
+    except Exception as e:
+        app.logger.warning("Could not send reminder to %s: %s", sub.get("telegram_user_id"), e)
+        return False
+
+
+@app.route("/api/subscribers/<sub_id>/remind", methods=["POST"])
+@login_required
+def api_remind_one(sub_id):
+    sub = dal.get_subscriber(sub_id)
+    if not sub:
+        return jsonify({"error": "not found"}), 404
+    ok = _send_reminder_message(sub)
+    return jsonify({"ok": ok}), (200 if ok else 502)
+
+
+@app.route("/api/subscribers/remind-expiring", methods=["POST"])
+@login_required
+def api_remind_expiring():
+    """One-time reminder to everyone whose plan ends within the configured
+    'reminder days' window (same group the Expiring stat card counts)."""
+    days = int(dal.get_setting("reminder_days_before", "3") or 3)
+    sent = failed = 0
+    for sub in dal.get_expiring_subscribers(days):
+        if _send_reminder_message(sub):
+            sent += 1
+        else:
+            failed += 1
+    return jsonify({"ok": True, "sent": sent, "failed": failed})
+
+
+# ------------------------------------------------------ api: bot web link --
+
+_bot_username_cache = {}
+
+
+@app.route("/api/bot-link")
+@login_required
+def api_bot_link():
+    """https://t.me/<bot> — drop this on the website: tapping it opens Telegram
+    and starts the bot. Username is looked up from the bot token once."""
+    if "username" not in _bot_username_cache:
+        if not BOT_TOKEN:
+            return jsonify({"error": "BOT_TOKEN is not set"}), 400
+        try:
+            import asyncio
+            from telegram import Bot
+
+            async def _me():
+                return (await Bot(token=BOT_TOKEN).get_me()).username
+
+            _bot_username_cache["username"] = asyncio.run(_me())
+        except Exception as e:
+            app.logger.warning("Could not look up bot username: %s", e)
+            return jsonify({"error": "Could not reach Telegram"}), 502
+    name = _bot_username_cache["username"]
+    return jsonify({"username": name, "link": f"https://t.me/{name}"})
 
 
 # ------------------------------------------------------- api: dev / json --
@@ -347,11 +508,27 @@ def stripe_webhook():
 
         sub_id = dal.apply_purchase(
             telegram_user_id, telegram_username, button_text, duration_type, price, "stripe", custom_days,
+            session_obj.get("subscription") or None,
         )
         dal.record_payment_success(telegram_user_id, amount, "stripe", session_obj.get("id", ""), subscriber_id=sub_id)
 
         sent = _notify_and_invite(telegram_user_id)
         dal.update_subscriber(sub_id, {"link_sent": 1 if sent else 0})
+
+    elif event_type == "invoice.paid":
+        # A recurring Stripe subscription charging again. (The very first invoice
+        # is already handled by checkout.session.completed above, so skip it.)
+        inv = payload.get("data", {}).get("object", {})
+        if inv.get("billing_reason") == "subscription_cycle":
+            member = dal.get_subscriber_by_provider_subscription_id(inv.get("subscription"))
+            if member:
+                _apply_renewal(member, (inv.get("amount_paid", 0) or 0) / 100, "stripe", inv.get("id", ""))
+
+    elif event_type == "invoice.payment_failed":
+        inv = payload.get("data", {}).get("object", {})
+        member = dal.get_subscriber_by_provider_subscription_id(inv.get("subscription"))
+        if member:
+            dal.record_payment_failed(member["telegram_user_id"], "stripe", "renewal payment failed", subscriber_id=member["id"])
 
     elif event_type == "checkout.session.async_payment_failed":
         session_obj = payload.get("data", {}).get("object", {})
@@ -361,6 +538,20 @@ def stripe_webhook():
         dal.record_payment_failed(telegram_user_id, "stripe", "payment declined", subscriber_id=sub_id)
 
     return jsonify({"received": True})
+
+
+def _apply_renewal(member, amount, provider, ref):
+    """A recurring charge succeeded: extend their period using the plan they're
+    already on. They're already in the group, so no new invite goes out and the
+    'link sent' flag stays exactly as it was."""
+    keep_link_flag = member.get("link_sent", 0)
+    sub_id = dal.apply_purchase(
+        member["telegram_user_id"], member.get("telegram_username", ""), member.get("button_text", "Renewal"),
+        member.get("duration_type", "monthly"), member.get("price", amount), provider, member.get("custom_days"),
+    )
+    dal.update_subscriber(sub_id, {"link_sent": keep_link_flag})
+    dal.record_payment_success(member["telegram_user_id"], amount, provider, ref, subscriber_id=sub_id)
+    return sub_id
 
 
 def _verotel_signature(params):
@@ -402,13 +593,17 @@ def verotel_webhook():
     # "purchase"/"subscription" = first charge, "rebill" = a recurring
     # subscription auto-charging again — both activate/extend the user
     if sale_type in ("purchase", "subscription", "rebill", "sale"):
-        sub_id = dal.apply_purchase(
-            telegram_user_id, telegram_username, data.get("description", "CardBilling plan"),
-            duration_type, amount, "verotel", custom_days,
-        )
-        dal.record_payment_success(telegram_user_id, amount, "verotel", sale_id, subscriber_id=sub_id)
-        sent = _notify_and_invite(telegram_user_id)
-        dal.update_subscriber(sub_id, {"link_sent": 1 if sent else 0})
+        existing = dal.get_subscriber_by_telegram_id(telegram_user_id)
+        if sale_type == "rebill" and existing:
+            _apply_renewal(existing, amount, "verotel", sale_id)   # already in the group: just extend
+        else:
+            sub_id = dal.apply_purchase(
+                telegram_user_id, telegram_username, data.get("description", "CardBilling plan"),
+                duration_type, amount, "verotel", custom_days,
+            )
+            dal.record_payment_success(telegram_user_id, amount, "verotel", sale_id, subscriber_id=sub_id)
+            sent = _notify_and_invite(telegram_user_id)
+            dal.update_subscriber(sub_id, {"link_sent": 1 if sent else 0})
 
     # "cancel"/"stop" = subscription cancelled, "chargeback"/"decline"/"expiry" = failed/ended
     elif sale_type in ("cancel", "stop", "chargeback", "decline", "expiry"):
@@ -422,7 +617,7 @@ def verotel_webhook():
 def _kick_member(sub_id):
     """Removes a member from the group/channel right away (used when an
     admin manually marks someone expired and ticks 'remove now')."""
-    if not BOT_TOKEN or not GROUP_CHAT_ID:
+    if not BOT_TOKEN or not _group_chat_id():
         return
     sub = dal.get_subscriber(sub_id)
     if not sub:
@@ -433,8 +628,8 @@ def _kick_member(sub_id):
 
         async def _kick():
             bot = Bot(token=BOT_TOKEN)
-            await bot.ban_chat_member(chat_id=GROUP_CHAT_ID, user_id=int(sub["telegram_user_id"]))
-            await bot.unban_chat_member(chat_id=GROUP_CHAT_ID, user_id=int(sub["telegram_user_id"]))
+            await bot.ban_chat_member(chat_id=_group_chat_id(), user_id=int(sub["telegram_user_id"]))
+            await bot.unban_chat_member(chat_id=_group_chat_id(), user_id=int(sub["telegram_user_id"]))
 
         asyncio.run(_kick())
     except Exception as e:
@@ -445,7 +640,7 @@ def _notify_and_invite(telegram_user_id):
     """Sends the user a one-time group invite link once payment is confirmed.
     Returns True if it was actually delivered, False otherwise (this is
     exactly what the dashboard's Link Sent column reflects)."""
-    if not BOT_TOKEN or not GROUP_CHAT_ID:
+    if not BOT_TOKEN or not _group_chat_id():
         return False
     try:
         import asyncio
@@ -453,7 +648,7 @@ def _notify_and_invite(telegram_user_id):
 
         async def _send():
             bot = Bot(token=BOT_TOKEN)
-            invite = await bot.create_chat_invite_link(chat_id=GROUP_CHAT_ID, member_limit=1)
+            invite = await bot.create_chat_invite_link(chat_id=_group_chat_id(), member_limit=1)
             await bot.send_message(
                 chat_id=int(telegram_user_id),
                 text=f"✅ *Payment confirmed!*\n\n🎉 Welcome aboard — tap below to join:\n{invite.invite_link}",

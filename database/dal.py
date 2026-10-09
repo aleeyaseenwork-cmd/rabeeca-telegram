@@ -40,6 +40,12 @@ get_active_panel = _impl.get_active_panel
 get_expiring_subscribers = _impl.get_expiring_subscribers
 get_expired_subscribers = _impl.get_expired_subscribers
 get_dev_table = _impl.get_dev_table
+get_subscriber_by_provider_subscription_id = _impl.get_subscriber_by_provider_subscription_id
+get_bans = _impl.get_bans
+is_banned = _impl.is_banned
+ban_user = _impl.ban_user
+unban_user = _impl.unban_user
+get_revenue_for_range = _impl.get_revenue_for_range
 get_subscriber = _impl.get_subscriber
 get_subscriber_by_telegram_id = _impl.get_subscriber_by_telegram_id
 get_latest_pending_subscriber = _impl.get_latest_pending_subscriber  # back-compat alias
@@ -126,13 +132,13 @@ def record_payment_failed(telegram_user_id, provider, failure_reason, subscriber
         log.warning("Could not mirror failed payment to Sheets: %s", e)
 
 
-def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None):
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None, provider_subscription_id=None):
     """
     One row per Telegram user. First purchase creates it; buying again
     while active stacks the expiry forward; buying again after expiry
     starts fresh; lifetime always wins outright. See db.py/db_mongo.py.
     """
-    sub_id = _impl.apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days)
+    sub_id = _impl.apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days, provider_subscription_id)
     try:
         row = _impl.get_subscriber(sub_id)
         if row:

@@ -32,7 +32,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
+GROUP_CHAT_ID_ENV = os.environ.get("GROUP_CHAT_ID", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5000")
 
@@ -43,11 +43,32 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 dal.init_db()
 
+
+def _group_chat_id():
+    """Channel/group the bot manages — set from Settings in the dashboard,
+    with the GROUP_CHAT_ID env var only as a fallback."""
+    return (dal.get_setting("group_chat_id", "") or "").strip() or GROUP_CHAT_ID_ENV
+
+
+BANNED_TEXT = "🚫 Sorry, you can't use this service."
+
+# dashboard currency symbol -> ISO code the payment providers bill in
+CURRENCY_CODES = {"$": "USD", "€": "EUR", "£": "GBP", "CHF": "CHF", "CA$": "CAD", "A$": "AUD"}
+
+
+def _currency_code():
+    symbol = (dal.get_setting("currency_symbol", "$") or "$").strip()
+    return CURRENCY_CODES.get(symbol, "USD")
+
 PROVIDER_LABELS = {"stripe": "Stripe", "ccbill": "CCBill", "verotel": "CardBilling", "paypal": "PayPal"}
 DURATION_LABELS = {"weekly": "week", "monthly": "month", "quarterly": "3 months", "semiannual": "6 months", "yearly": "year", "onetime": "lifetime", "custom": "custom"}
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if dal.is_banned(update.effective_user.id):
+        await update.message.reply_text(BANNED_TEXT)
+        return
+
     panel = dal.get_active_panel()
     if not panel:
         await update.message.reply_text(
@@ -79,6 +100,9 @@ async def handle_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     to payment. If several are active, ask which one to pay with."""
     query = update.callback_query
     await query.answer()
+    if dal.is_banned(query.from_user.id):
+        await query.edit_message_text(BANNED_TEXT)
+        return
 
     buttons = context.user_data.get("panel_buttons")
     if not buttons:
@@ -114,6 +138,9 @@ async def handle_pay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Step 2 (only reached with multiple active providers): provider chosen."""
     query = update.callback_query
     await query.answer()
+    if dal.is_banned(query.from_user.id):
+        await query.edit_message_text(BANNED_TEXT)
+        return
 
     buttons = context.user_data.get("panel_buttons")
     if not buttons:
@@ -206,7 +233,7 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
             is_subscription = auto_billing and plan["duration_type"] in STRIPE_RECURRING
             line_item = {
                 "price_data": {
-                    "currency": "usd",
+                    "currency": _currency_code().lower(),
                     "product_data": {"name": plan["text"]},
                     "unit_amount": int(round(plan["price"] * 100)),
                 },
@@ -244,7 +271,7 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
             params = {
                 "shopID": VEROTEL_SHOP_ID,
                 "priceAmount": f"{plan['price']:.2f}",
-                "priceCurrency": "USD",
+                "priceCurrency": _currency_code(),
                 "version": "3.5",
                 "description": plan["text"][:255],
                 "custom1": str(telegram_user_id),
@@ -271,6 +298,71 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
         return f"{DASHBOARD_URL}/checkout/paypal?ref={telegram_user_id}&price={plan['price']}"
 
 
+def _cancel_provider_billing(sub):
+    """Ends the real recurring billing at the provider (blocking calls —
+    run via asyncio.to_thread). Returns True if the provider accepted it."""
+    provider = sub.get("provider")
+
+    if provider == "stripe" and sub.get("provider_subscription_id"):
+        # cancel_at_period_end: no further charges, but they keep access
+        # until the period they already paid for runs out
+        stripe.Subscription.modify(sub["provider_subscription_id"], cancel_at_period_end=True)
+        return True
+
+    if provider == "verotel" and VEROTEL_SHOP_ID and VEROTEL_SIGNATURE_KEY:
+        from urllib.request import urlopen
+        # the sale id of their latest successful CardBilling payment
+        payments = [
+            p for p in dal.get_dev_table("payments")
+            if str(p.get("telegram_user_id")) == str(sub["telegram_user_id"])
+            and p.get("provider") == "verotel" and p.get("status") == "successful" and p.get("provider_ref")
+        ]
+        if not payments:
+            return False
+        sale_id = sorted(payments, key=lambda p: p.get("created_at", ""))[-1]["provider_ref"]
+        params = {"saleID": sale_id, "shopID": VEROTEL_SHOP_ID, "version": "3.5"}
+        params["signature"] = verotel_signature(VEROTEL_SIGNATURE_KEY, params)
+        with urlopen(f"https://secure.verotel.com/cancel-subscription?{urlencode(params)}", timeout=15) as resp:
+            return 200 <= resp.status < 300
+
+    return False
+
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cancel — member turns off their own auto-renewal. They keep access
+    until the end of the period they already paid for."""
+    user = update.effective_user
+    sub = dal.get_subscriber_by_telegram_id(user.id)
+
+    if not sub or sub.get("status") != "active":
+        await update.message.reply_text("You don't have an active subscription to cancel.")
+        return
+    if not sub.get("auto_renew"):
+        await update.message.reply_text(
+            "ℹ️ Your plan isn't set to auto-renew, so there's nothing to cancel — "
+            f"it simply ends on *{(sub.get('expiry_date') or '')[:10]}*.",
+            parse_mode="Markdown",
+        )
+        return
+
+    try:
+        import asyncio
+        await asyncio.to_thread(_cancel_provider_billing, sub)
+    except Exception as e:
+        log.error("Provider cancel failed for %s: %s", user.id, e)
+        await update.message.reply_text(
+            "😕 I couldn't cancel that automatically. Please contact support and we'll sort it out."
+        )
+        return
+
+    dal.update_subscriber(sub["id"], {"auto_renew": 0})
+    await update.message.reply_text(
+        "✅ *Auto-renewal cancelled.*\n\n"
+        f"You keep full access until *{(sub.get('expiry_date') or '')[:10]}* and won't be charged again.",
+        parse_mode="Markdown",
+    )
+
+
 async def send_reminders_and_kick(context: ContextTypes.DEFAULT_TYPE):
     """Daily job: reminds users expiring soon, optionally kicks expired ones."""
     reminder_days = int(dal.get_setting("reminder_days_before", "3"))
@@ -292,9 +384,9 @@ async def send_reminders_and_kick(context: ContextTypes.DEFAULT_TYPE):
         expired = dal.get_expired_subscribers()
         for sub in expired:
             try:
-                if GROUP_CHAT_ID:
-                    await context.bot.ban_chat_member(chat_id=GROUP_CHAT_ID, user_id=int(sub["telegram_user_id"]))
-                    await context.bot.unban_chat_member(chat_id=GROUP_CHAT_ID, user_id=int(sub["telegram_user_id"]))
+                if _group_chat_id():
+                    await context.bot.ban_chat_member(chat_id=_group_chat_id(), user_id=int(sub["telegram_user_id"]))
+                    await context.bot.unban_chat_member(chat_id=_group_chat_id(), user_id=int(sub["telegram_user_id"]))
                 dal.update_subscriber(sub["id"], {"status": "expired"})
             except Exception as e:
                 log.warning("Could not remove user %s: %s", sub["telegram_user_id"], e)
@@ -307,6 +399,7 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CallbackQueryHandler(handle_buy, pattern=r"^buy:"))
     app.add_handler(CallbackQueryHandler(handle_pay, pattern=r"^pay:"))
 

@@ -72,6 +72,16 @@ def init_db():
     _add_column_if_missing(conn, "subscribers", "purchase_count INTEGER DEFAULT 0")
     _add_column_if_missing(conn, "subscribers", "link_sent INTEGER DEFAULT 0")
     _add_column_if_missing(conn, "subscribers", "custom_days INTEGER")
+    _add_column_if_missing(conn, "subscribers", "provider_subscription_id TEXT")
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS bans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        telegram_user_id TEXT UNIQUE NOT NULL,
+        reason TEXT,
+        banned_at TEXT NOT NULL
+    )
+    """)
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS payments (
@@ -110,6 +120,7 @@ def init_db():
         "reminder_days_before": "3",
         "auto_kick_on_expiry": "0",
         "auto_billing_enabled": "1",
+        "group_chat_id": "",
     }
     for k, v in defaults.items():
         c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", (k, v))
@@ -244,6 +255,19 @@ def get_subscriber_by_telegram_id(telegram_user_id):
 
 # kept for backward compatibility with any code still calling it; now just
 # an alias since there is at most one (pending-or-not) row per user
+def get_subscriber_by_provider_subscription_id(provider_subscription_id):
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM subscribers WHERE provider_subscription_id = ?", (str(provider_subscription_id),)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return None
+    d = _row_with_last_payment(conn, row)
+    conn.close()
+    return d
+
+
 def get_latest_pending_subscriber(telegram_user_id):
     return get_subscriber_by_telegram_id(telegram_user_id)
 
@@ -304,7 +328,7 @@ def export_subscribers(status="", pay_status="", search=""):
     return result["rows"]
 
 
-def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None):
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None, provider_subscription_id=None):
     """
     The one place purchase logic happens. Creates the subscriber row on a
     first-ever purchase, or extends/stacks the existing one on a renewal:
@@ -330,19 +354,23 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
     if existing:
         conn.execute(
             "UPDATE subscribers SET telegram_username=?, button_text=?, duration_type=?, custom_days=?, price=?, "
-            "status='active', expiry_date=?, provider=?, purchase_count=purchase_count+1, link_sent=0 "
+            "status='active', expiry_date=?, provider=?, provider_subscription_id=COALESCE(?, provider_subscription_id), "
+            "auto_renew=CASE WHEN ? IS NOT NULL THEN 1 ELSE auto_renew END, "
+            "purchase_count=purchase_count+1, link_sent=0 "
             "WHERE telegram_user_id=?",
-            (telegram_username or "", button_text, duration_type, custom_days, price, new_expiry, provider, str(telegram_user_id)),
+            (telegram_username or "", button_text, duration_type, custom_days, price, new_expiry, provider,
+             provider_subscription_id, provider_subscription_id, str(telegram_user_id)),
         )
         sub_id = existing["id"]
     else:
         cur = conn.execute(
             "INSERT INTO subscribers (telegram_user_id, telegram_username, panel_id, button_text, "
             "duration_type, custom_days, price, status, auto_renew, start_date, expiry_date, provider, "
-            "purchase_count, link_sent, created_at) "
-            "VALUES (?, ?, NULL, ?, ?, ?, ?, 'active', 0, ?, ?, ?, 1, 0, ?)",
+            "provider_subscription_id, purchase_count, link_sent, created_at) "
+            "VALUES (?, ?, NULL, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, 1, 0, ?)",
             (str(telegram_user_id), telegram_username or "", button_text, duration_type, custom_days, price,
-             now.isoformat(), new_expiry, provider, now.isoformat()),
+             1 if provider_subscription_id else 0,
+             now.isoformat(), new_expiry, provider, provider_subscription_id, now.isoformat()),
         )
         sub_id = str(cur.lastrowid)
     conn.commit()
@@ -456,8 +484,57 @@ def get_expired_subscribers():
 
 # ------------------------------------------------------------ dev view ---
 
+# ------------------------------------------------------------- bans -----
+
+def get_bans():
+    conn = get_conn()
+    rows = [dict(r) for r in conn.execute("SELECT * FROM bans ORDER BY banned_at DESC").fetchall()]
+    conn.close()
+    for r in rows:
+        r["id"] = str(r["id"])
+    return rows
+
+
+def is_banned(telegram_user_id):
+    conn = get_conn()
+    row = conn.execute("SELECT 1 FROM bans WHERE telegram_user_id = ?", (str(telegram_user_id),)).fetchone()
+    conn.close()
+    return row is not None
+
+
+def ban_user(telegram_user_id, reason=""):
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO bans (telegram_user_id, reason, banned_at) VALUES (?, ?, ?)",
+        (str(telegram_user_id), reason or "", datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def unban_user(telegram_user_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM bans WHERE telegram_user_id = ?", (str(telegram_user_id),))
+    conn.commit()
+    conn.close()
+
+
+# ----------------------------------------------------------- revenue ----
+
+def get_revenue_for_range(start_date, end_date):
+    """start_date/end_date are ISO date strings (YYYY-MM-DD); end is inclusive."""
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(amount),0) as total, COUNT(*) as n FROM payments "
+        "WHERE status='successful' AND created_at >= ? AND created_at < ?",
+        (start_date, end_date),
+    ).fetchone()
+    conn.close()
+    return {"revenue": row["total"], "count": row["n"]}
+
+
 def get_dev_table(table_name):
-    if table_name not in ("panels", "subscribers", "payments", "settings", "admins"):
+    if table_name not in ("panels", "subscribers", "payments", "settings", "admins", "bans"):
         raise ValueError("invalid table")
     conn = get_conn()
     rows = [dict(r) for r in conn.execute(f"SELECT * FROM {table_name}").fetchall()]

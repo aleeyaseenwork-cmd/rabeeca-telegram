@@ -67,6 +67,7 @@ def init_db():
     db.payments.create_index("status")
     db.settings.create_index("key", unique=True)
     db.admins.create_index("telegram_admin_id", unique=True)
+    db.bans.create_index("telegram_user_id", unique=True)
 
     try:
         _dedupe_subscribers(db)
@@ -90,6 +91,7 @@ def init_db():
         "reminder_days_before": "3",
         "auto_kick_on_expiry": "0",
         "auto_billing_enabled": "1",
+        "group_chat_id": "",
     }
     for k, v in defaults.items():
         db.settings.update_one({"key": k}, {"$setOnInsert": {"value": v}}, upsert=True)
@@ -214,6 +216,12 @@ def get_subscriber_by_telegram_id(telegram_user_id):
     return _serialize_subscriber(db, doc) if doc else None
 
 
+def get_subscriber_by_provider_subscription_id(provider_subscription_id):
+    db = _get_db()
+    doc = db.subscribers.find_one({"provider_subscription_id": str(provider_subscription_id)})
+    return _serialize_subscriber(db, doc) if doc else None
+
+
 def get_latest_pending_subscriber(telegram_user_id):
     return get_subscriber_by_telegram_id(telegram_user_id)
 
@@ -245,7 +253,7 @@ def export_subscribers(status="", pay_status="", search=""):
     return result["rows"]
 
 
-def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None):
+def apply_purchase(telegram_user_id, telegram_username, button_text, duration_type, price, provider, custom_days=None, provider_subscription_id=None):
     """
     The one place purchase logic happens. Creates the subscriber document on
     a first-ever purchase, or extends/stacks the existing one on a renewal:
@@ -282,6 +290,7 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
                     "expiry_date": new_expiry,
                     "provider": provider,
                     "link_sent": 0,
+                    **({"provider_subscription_id": provider_subscription_id, "auto_renew": 1} if provider_subscription_id else {}),
                 },
                 "$inc": {"purchase_count": 1},
             },
@@ -292,7 +301,8 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
             "telegram_user_id": str(telegram_user_id), "telegram_username": telegram_username or "",
             "panel_id": None, "button_text": button_text, "duration_type": duration_type,
             "custom_days": custom_days,
-            "price": price, "currency": "USD", "status": "active", "auto_renew": 0,
+            "price": price, "currency": "USD", "status": "active", "auto_renew": 1 if provider_subscription_id else 0,
+            "provider_subscription_id": provider_subscription_id,
             "start_date": now.isoformat(), "expiry_date": new_expiry, "provider": provider,
             "purchase_count": 1, "link_sent": 0, "created_at": now.isoformat(),
         })
@@ -386,8 +396,51 @@ def get_expired_subscribers():
 
 # ------------------------------------------------------------ dev view ---
 
+# ------------------------------------------------------------- bans -----
+
+def get_bans():
+    db = _get_db()
+    rows = []
+    for d in db.bans.find({}).sort("banned_at", -1):
+        d = dict(d)
+        d["id"] = str(d.pop("_id"))
+        rows.append(d)
+    return rows
+
+
+def is_banned(telegram_user_id):
+    db = _get_db()
+    return db.bans.find_one({"telegram_user_id": str(telegram_user_id)}) is not None
+
+
+def ban_user(telegram_user_id, reason=""):
+    db = _get_db()
+    db.bans.update_one(
+        {"telegram_user_id": str(telegram_user_id)},
+        {"$setOnInsert": {"reason": reason or "", "banned_at": datetime.utcnow().isoformat()}},
+        upsert=True,
+    )
+
+
+def unban_user(telegram_user_id):
+    db = _get_db()
+    db.bans.delete_one({"telegram_user_id": str(telegram_user_id)})
+
+
+# ----------------------------------------------------------- revenue ----
+
+def get_revenue_for_range(start_date, end_date):
+    """start_date/end_date are ISO date strings (YYYY-MM-DD); end is exclusive here, callers add a day."""
+    db = _get_db()
+    docs = list(db.payments.find({
+        "status": "successful",
+        "created_at": {"$gte": start_date, "$lt": end_date},
+    }, {"amount": 1}))
+    return {"revenue": sum(d.get("amount") or 0 for d in docs), "count": len(docs)}
+
+
 def get_dev_table(table_name):
-    if table_name not in ("panels", "subscribers", "payments", "settings", "admins"):
+    if table_name not in ("panels", "subscribers", "payments", "settings", "admins", "bans"):
         raise ValueError("invalid table")
     db = _get_db()
     rows = []

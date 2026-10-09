@@ -453,3 +453,34 @@ tbody tr:hover { background: var(--surface-alt); }
   .header-row { align-items: flex-start; }
   .header-actions { width: 100%; }
 }
+
+/* ---- revenue range ---- */
+.range-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+.range-title { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 10px; }
+.range-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.range-controls input[type="date"] {
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font-size: 13px; font-family: inherit;
+}
+.range-sep { color: var(--text-muted); font-size: 13px; }
+.range-result { margin-top: 10px; font-size: 14px; min-height: 20px; }
+.range-result strong { font-size: 20px; letter-spacing: -0.01em; }
+.range-result .range-meta { color: var(--text-muted); font-size: 12px; margin-left: 8px; }
+
+/* ---- bans ---- */
+.bans-list { margin-top: 14px; border-top: 1px solid var(--border); }
+.ban-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.ban-row .ban-id { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ban-row .ban-reason { color: var(--text-muted); font-size: 12px; }
+.ban-empty { padding: 14px 0; color: var(--text-muted); font-size: 13px; }
+
+/* ---- settings copy field ---- */
+.copy-row { display: flex; gap: 8px; }
+.copy-row input { flex: 1; }

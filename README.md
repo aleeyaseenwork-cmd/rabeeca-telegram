@@ -152,7 +152,9 @@ Run both the dashboard and the bot at the same time, they share the same databas
 
 1. Add your keys to `.env`: `STRIPE_SECRET_KEY` (test or live).
 2. In Stripe Dashboard → Developers → Webhooks, add an endpoint:
-   `https://your-domain.com/webhook/stripe`, sending `checkout.session.completed` and `checkout.session.async_payment_failed`.
+   `https://your-domain.com/webhook/stripe`, sending these four events:
+   `checkout.session.completed`, `checkout.session.async_payment_failed`, **`invoice.paid`** and **`invoice.payment_failed`**.
+   The two `invoice.*` events are what extend a member's period when their card auto-renews — without them, auto-renewing members would be removed at the end of their first period.
 3. Copy the webhook's signing secret into `STRIPE_WEBHOOK_SECRET` in `.env`.
 4. In the dashboard's Settings, tick **Stripe** under Active payment providers.
 
@@ -177,6 +179,24 @@ How it works: `build_checkout_link()` in `bot/bot.py` builds a signed redirect t
 **Auto-rebill toggle:** Settings has an "Auto-rebill subscriptions" checkbox (on by default) that applies to both Stripe and CardBilling at once. On: weekly/monthly/3-month/6-month/yearly plans are real recurring subscriptions that auto-charge each period. Off: every plan becomes a single charge instead — buyers have to repay manually when their reminder arrives, nothing gets auto-charged. Flip it anytime from the dashboard, no redeploy needed.
 
 **Multiple providers active at once:** if more than one provider is ticked in Settings, the bot asks the buyer "Pay with Stripe" / "Pay with CardBilling" before building the link; with just one ticked, it skips straight to payment.
+
+---
+
+## 6.3 Admin features and member commands
+
+**Dashboard**
+- **Banned** (header) — ban by Telegram ID, not username, so renaming doesn't get around it. Banned IDs can't use the bot or buy; banning also cancels their subscription and can remove them from the channel immediately. You can also ban straight from a subscriber's ⋮ menu.
+- **Revenue by date range** — pick any two dates (or This month / Last month / Last 30 days) to see revenue and payment count for just that window.
+- **Remind expiring** (Subscribers toolbar) — sends one reminder message to everyone whose plan ends within your "reminder days" window. **Send reminder now** in a row's ⋮ menu does it for one person.
+- **Settings → Telegram group / channel ID** — set which channel the bot manages yourself, no redeploy. Add the bot to the channel as an admin with *Invite users* and *Ban users*, then paste the channel ID (looks like `-100…`). The `GROUP_CHAT_ID` env var is now only a fallback.
+- **Settings → Bot link for your website** — a `https://t.me/<yourbot>` link. Put it on the site; clicking it opens Telegram and starts the bot.
+- **Currency** — changing the symbol (e.g. `$` → `€`) now also relabels the plan buttons and switches the real billing currency at Stripe/CardBilling. Supported: `$ € £ CHF CA$ A$`; anything else bills in USD.
+
+**Member commands (in the bot)**
+- `/start` — see plans and buy.
+- `/cancel` — turns off their own auto-renewal. Stripe: ends future charges (they keep access until the period they paid for ends). CardBilling: calls Verotel's cancel-subscription endpoint. They are told the date their access ends.
+
+Note: `/cancel` can end *real* recurring billing only for members who subscribed after this version (their Stripe subscription ID is stored at signup). For older members it just switches off auto-renew in the dashboard.
 
 ---
 

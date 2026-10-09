@@ -121,6 +121,8 @@ function renderSubsTable(rows) {
           <button title="Edit" onclick="openEditModal('${r.id}')">${ICON_PENCIL}</button>
           <button title="More" onclick="toggleRowMenu(event, '${r.id}')">${ICON_DOTS}</button>
           <div class="row-menu hidden" id="rowMenu-${r.id}">
+            <button onclick="remindOne('${r.id}')">Send reminder now</button>
+            <button onclick="banFromRow('${r.telegram_user_id}')">Ban this user</button>
             <button class="danger" onclick="deleteSubscriber('${r.id}')">Delete</button>
           </div>
         </div>
@@ -444,7 +446,7 @@ async function loadPanels() {
         <h3>${escapeHtml(p.name)}</h3>
         <p>${escapeHtml(p.message_text)}</p>
         <div class="panel-buttons-preview">
-          ${p.buttons.map(b => `<span>${escapeHtml(b.text)} (${escapeHtml(b.duration_type)})</span>`).join("")}
+          ${p.buttons.map(b => `<span>${escapeHtml(b.text)} · ${currencySymbol}${Number(b.price).toFixed(2)} · ${escapeHtml(b.duration_type)}</span>`).join("")}
         </div>
       </div>
       <div class="panel-card-actions">
@@ -639,6 +641,8 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
   document.getElementById("providerStripe").checked = activeProviders.includes("stripe");
   document.getElementById("providerCcbill").checked = activeProviders.includes("ccbill");
   document.getElementById("providerVerotel").checked = activeProviders.includes("verotel");
+  document.getElementById("settingGroupId").value = s.group_chat_id || "";
+  loadBotLink();
   document.getElementById("settingReminderDays").value = s.reminder_days_before || 3;
   document.getElementById("settingAutoKick").checked = s.auto_kick_on_expiry === "1";
   document.getElementById("settingAutoBilling").checked = s.auto_billing_enabled !== "0";
@@ -665,6 +669,7 @@ document.getElementById("settingsSaveBtn").addEventListener("click", async () =>
       dashboard_title: document.getElementById("settingTitle").value,
       currency_symbol: document.getElementById("settingCurrency").value,
       active_providers: providers.join(","),
+      group_chat_id: document.getElementById("settingGroupId").value.trim(),
       reminder_days_before: document.getElementById("settingReminderDays").value,
       auto_kick_on_expiry: document.getElementById("settingAutoKick").checked ? "1" : "0",
       auto_billing_enabled: document.getElementById("settingAutoBilling").checked ? "1" : "0",
@@ -673,7 +678,10 @@ document.getElementById("settingsSaveBtn").addEventListener("click", async () =>
   });
   document.getElementById("dashTitle").textContent = document.getElementById("settingTitle").value;
   document.getElementById("settingsModal").classList.add("hidden");
-  loadStats();
+  allPanels = [];
+  await loadStats();       // also re-reads the currency symbol
+  loadSubscribers();
+  loadPanels();
 });
 
 document.getElementById("changePasswordBtn").addEventListener("click", async () => {
@@ -695,6 +703,132 @@ document.getElementById("changePasswordBtn").addEventListener("click", async () 
     msg.style.color = "var(--failed)";
     msg.textContent = data.error || "Could not update password.";
   }
+});
+
+
+// ---------- reminders ----------
+async function remindOne(id) {
+  const res = await fetch(`/api/subscribers/${id}/remind`, { method: "POST" });
+  alert(res.ok ? "Reminder sent." : "Couldn't send it — the user may have blocked the bot or never started it.");
+}
+
+document.getElementById("remindExpiringBtn").addEventListener("click", async () => {
+  if (!confirm("Send a one-time reminder to everyone whose plan is about to end?")) return;
+  const res = await fetch("/api/subscribers/remind-expiring", { method: "POST" });
+  const data = await res.json();
+  alert(`Reminders sent: ${data.sent}` + (data.failed ? `\nCouldn't reach: ${data.failed}` : ""));
+});
+
+// ---------- bans ----------
+async function loadBans() {
+  const res = await fetch("/api/bans");
+  const bans = await res.json();
+  const list = document.getElementById("bansList");
+  if (!bans.length) { list.innerHTML = '<div class="ban-empty">Nobody is banned.</div>'; return; }
+  list.innerHTML = bans.map(b => `
+    <div class="ban-row">
+      <div>
+        <div class="ban-id">${escapeHtml(b.telegram_user_id)}</div>
+        <div class="ban-reason">${escapeHtml(b.reason || "No reason given")} · ${new Date(b.banned_at).toLocaleDateString()}</div>
+      </div>
+      <button class="btn-outline" onclick="unban('${escapeHtml(b.telegram_user_id)}')">Unban</button>
+    </div>`).join("");
+}
+
+async function unban(id) {
+  if (!confirm(`Unban ${id}? They'll be able to use the bot again.`)) return;
+  await fetch(`/api/bans/${id}`, { method: "DELETE" });
+  loadBans();
+}
+
+async function banUser(telegramId, reason, kickNow) {
+  const res = await fetch("/api/bans", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ telegram_user_id: telegramId, reason, kick_now: kickNow }),
+  });
+  const data = await res.json();
+  return { ok: res.ok, error: data.error };
+}
+
+document.getElementById("bansBtn").addEventListener("click", () => {
+  document.getElementById("banMsg").textContent = "";
+  document.getElementById("bansModal").classList.remove("hidden");
+  loadBans();
+});
+document.getElementById("bansCloseBtn").addEventListener("click", () => {
+  document.getElementById("bansModal").classList.add("hidden");
+});
+document.getElementById("banAddBtn").addEventListener("click", async () => {
+  const id = document.getElementById("banIdInput").value.trim();
+  const msg = document.getElementById("banMsg");
+  const result = await banUser(id, document.getElementById("banReasonInput").value.trim(),
+                               document.getElementById("banKickNow").checked);
+  if (!result.ok) { msg.style.color = "var(--failed)"; msg.textContent = result.error || "Could not ban."; return; }
+  msg.style.color = "var(--success)"; msg.textContent = "Banned.";
+  document.getElementById("banIdInput").value = "";
+  document.getElementById("banReasonInput").value = "";
+  loadBans(); loadSubscribers(); loadStats();
+});
+
+async function banFromRow(telegramId) {
+  if (!confirm(`Ban Telegram ID ${telegramId} permanently? This also cancels their subscription.`)) return;
+  const kick = confirm("Also remove them from the group/channel right now?\n\nOK = remove now, Cancel = just ban.");
+  const result = await banUser(telegramId, "Banned from subscriber list", kick);
+  if (!result.ok) { alert(result.error || "Could not ban."); return; }
+  loadSubscribers(); loadStats();
+}
+
+// ---------- revenue by date range ----------
+function isoDate(d) { return d.toISOString().slice(0, 10); }
+
+async function calcRange() {
+  const start = document.getElementById("rangeStart").value;
+  const end = document.getElementById("rangeEnd").value;
+  const out = document.getElementById("rangeResult");
+  if (!start || !end) { out.textContent = "Pick a start and end date."; return; }
+  const res = await fetch(`/api/stats/revenue-range?start=${start}&end=${end}`);
+  const data = await res.json();
+  if (!res.ok) { out.textContent = data.error; return; }
+  out.innerHTML = `<strong>${data.currency_symbol}${data.revenue.toFixed(2)}</strong>` +
+    `<span class="range-meta">from ${data.count} payment${data.count === 1 ? "" : "s"}, ${start} to ${end}</span>`;
+}
+document.getElementById("rangeBtn").addEventListener("click", calcRange);
+
+document.querySelectorAll(".range-preset").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const now = new Date();
+    let start, end = now;
+    if (btn.dataset.preset === "this-month") start = new Date(now.getFullYear(), now.getMonth(), 1);
+    if (btn.dataset.preset === "last-month") {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      end = new Date(now.getFullYear(), now.getMonth(), 0);
+    }
+    if (btn.dataset.preset === "last-30") { start = new Date(now); start.setDate(start.getDate() - 30); }
+    // build YYYY-MM-DD from local parts so the timezone can't shift the day
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    document.getElementById("rangeStart").value = fmt(start);
+    document.getElementById("rangeEnd").value = fmt(end);
+    calcRange();
+  });
+});
+
+// ---------- bot link (for the website) ----------
+async function loadBotLink() {
+  const input = document.getElementById("settingBotLink");
+  input.value = "loading...";
+  try {
+    const res = await fetch("/api/bot-link");
+    const data = await res.json();
+    input.value = res.ok ? data.link : (data.error || "unavailable");
+  } catch (e) { input.value = "unavailable"; }
+}
+document.getElementById("copyBotLinkBtn").addEventListener("click", async () => {
+  const v = document.getElementById("settingBotLink").value;
+  if (!v.startsWith("https://")) return;
+  await navigator.clipboard.writeText(v);
+  const btn = document.getElementById("copyBotLinkBtn");
+  btn.textContent = "Copied"; setTimeout(() => btn.textContent = "Copy", 1500);
 });
 
 // ---------- init ----------
