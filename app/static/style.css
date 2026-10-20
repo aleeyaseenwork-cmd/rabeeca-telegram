@@ -523,3 +523,22 @@ tbody tr:hover { background: var(--surface-alt); }
 .revenue-total { margin: 4px 0 14px; }
 .revenue-table { min-width: 760px; }
 .revenue-table td.num, .revenue-table th.num { text-align: right; }
+
+/* ---- banned member rows (readable in light and dark) ---- */
+tr.row-banned td { background: #FBD9DB; color: #6E0F15; }
+tr.row-banned td.mono { color: #6E0F15; }
+tr.row-banned .link-yes, tr.row-banned .link-no { color: inherit; }
+:root[data-theme="dark"] tr.row-banned td { background: #45181C; color: #FFD3D6; }
+:root[data-theme="dark"] tr.row-banned td.mono { color: #FFD3D6; }
+.badge.banned { background: #C62828; color: #fff; }
+
+/* ---- broadcast modal ---- */
+.bc-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.bc-main { min-width: 0; flex: 1; }
+.bc-title { font-weight: 600; overflow-wrap: anywhere; }
+.bc-meta { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+.bc-error { color: var(--failed); font-size: 12px; margin-top: 2px; }
+.bc-side { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
+.bc-side button { padding: 4px 10px; font-size: 12px; }
+#bcNote.bc-error-note { color: var(--failed); }
+#bcNote.bc-ok-note { color: var(--success); }

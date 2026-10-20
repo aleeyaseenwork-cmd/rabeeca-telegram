@@ -101,13 +101,14 @@ function renderSubsTable(rows) {
   }
   rows.forEach(r => {
     const tr = document.createElement("tr");
+    if (r.banned) tr.className = "row-banned";
     tr.innerHTML = `
       <td class="mono">${escapeHtml(r.telegram_user_id)}</td>
       <td>${r.telegram_username ? "@" + escapeHtml(r.telegram_username) : "-"}</td>
       <td>${escapeHtml(r.button_text || "-")}</td>
       <td><span class="badge ${r.duration_type}">${escapeHtml(r.duration_type || "-")}${r.duration_type === "custom" && r.custom_days ? " (" + r.custom_days + "d)" : ""}</span></td>
       <td>${currencySymbol}${(r.price || 0).toFixed(2)}</td>
-      <td><span class="badge ${r.status}">${r.status}</span></td>
+      <td><span class="badge ${r.status}">${r.status}</span>${r.banned ? ' <span class="badge banned">Banned</span>' : ""}</td>
       <td>
         <input type="checkbox" class="auto-renew-checkbox" ${r.auto_renew ? "checked" : ""} onchange="toggleAutoRenew('${r.id}', this.checked)">
       </td>
@@ -781,8 +782,15 @@ async function loadBans() {
 
 async function unban(id) {
   if (!confirm(`Unban ${id}? They'll be able to use the bot again.`)) return;
-  await fetch(`/api/bans/${id}`, { method: "DELETE" });
+  const res = await fetch(`/api/bans/${id}`, { method: "DELETE" });
+  let data = {};
+  try { data = await res.json(); } catch (e) { /* ignore */ }
   loadBans();
+  loadSubscribers();
+  loadStats();
+  if (data.restored && !data.notified) {
+    alert("Unbanned and their access was restored, but the Telegram message couldn't be delivered (they may have blocked the bot).");
+  }
 }
 
 async function banUser(telegramId, reason, kickNow) {
@@ -882,3 +890,173 @@ function renderCurrentDate() {
 renderCurrentDate();
 loadStats();
 loadSubscribers();
+
+
+// ---------- Broadcast ----------
+const BC_MAX_BYTES = 50 * 1024 * 1024;
+const bcModal = document.getElementById("broadcastModal");
+let bcTimer = null;
+
+function bcNote(msg, kind) {
+  const el = document.getElementById("bcNote");
+  el.textContent = msg || "";
+  el.className = "hint" + (kind === "error" ? " bc-error-note" : kind === "ok" ? " bc-ok-note" : "");
+}
+
+// the API stores UTC without a "Z"
+function bcWhen(iso) {
+  if (!iso) return "-";
+  const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
+  return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+const BC_AUDIENCE = { active: "Active", expired: "Expired", all: "All" };
+const BC_STATUS_BADGE = { scheduled: "pending", sending: "pending", sent: "successful", cancelled: "cancelled", failed: "failed", interrupted: "failed" };
+
+function bcRenderList(list) {
+  const box = document.getElementById("bcList");
+  if (!list.length) { box.innerHTML = '<p class="hint">No broadcasts yet.</p>'; return; }
+  box.innerHTML = list.map(b => {
+    const preview = (b.message_text || "").trim().slice(0, 70) || (b.media_name ? "(file only)" : "(empty)");
+    const when = b.status === "scheduled" ? "Scheduled for " + bcWhen(b.scheduled_at) : bcWhen(b.started_at || b.scheduled_at);
+    const counts = b.status === "scheduled"
+      ? "Waiting to send"
+      : `Sent ${b.sent_count || 0} \u00b7 Failed ${b.failed_count || 0}` + (b.total ? ` of ${b.total}` : "");
+    return `
+      <div class="bc-row">
+        <div class="bc-main">
+          <div class="bc-title">${escapeHtml(preview)}${(b.message_text || "").trim().length > 70 ? "..." : ""}</div>
+          <div class="bc-meta">${escapeHtml(BC_AUDIENCE[b.audience] || b.audience)} \u00b7 ${escapeHtml(when)}${b.media_type ? " \u00b7 " + escapeHtml(b.media_type) + ": " + escapeHtml(b.media_name || "") : ""}</div>
+          <div class="bc-meta">${counts}</div>
+          ${b.error ? `<div class="bc-error">${escapeHtml(b.error)}</div>` : ""}
+        </div>
+        <div class="bc-side">
+          <span class="badge ${BC_STATUS_BADGE[b.status] || "cancelled"}">${escapeHtml(b.status)}</span>
+          ${b.status === "scheduled" ? `<button class="secondary" onclick="bcCancel('${b.id}')">Cancel</button>` : ""}
+        </div>
+      </div>`;
+  }).join("");
+}
+
+async function bcLoadList() {
+  try {
+    const res = await fetch("/api/broadcasts");
+    if (res.ok) bcRenderList(await res.json());
+  } catch (e) { /* keep what is shown */ }
+}
+
+async function bcCancel(id) {
+  if (!confirm("Cancel this scheduled broadcast?")) return;
+  const res = await fetch(`/api/broadcasts/${id}/cancel`, { method: "POST" });
+  if (!res.ok) {
+    let data = {};
+    try { data = await res.json(); } catch (e) { /* ignore */ }
+    alert(data.error || "Could not cancel it.");
+  }
+  bcLoadList();
+}
+
+function bcOpen() {
+  bcNote("");
+  const now = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  document.getElementById("bcWhen").min =
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  bcModal.classList.remove("hidden");
+  bcLoadList();
+  clearInterval(bcTimer);
+  bcTimer = setInterval(bcLoadList, 10000);   // keeps sent/failed counts fresh while it's open
+}
+
+function bcClose() {
+  bcModal.classList.add("hidden");
+  clearInterval(bcTimer);
+  bcTimer = null;
+}
+
+document.getElementById("broadcastBtn").addEventListener("click", bcOpen);
+document.getElementById("bcCloseBtn").addEventListener("click", bcClose);
+
+document.getElementById("bcMode").addEventListener("change", () => {
+  const schedule = document.getElementById("bcMode").value === "schedule";
+  document.getElementById("bcScheduleRow").classList.toggle("hidden", !schedule);
+  document.getElementById("bcSendBtn").textContent = schedule ? "Schedule" : "Send now";
+});
+
+document.getElementById("bcFile").addEventListener("change", () => {
+  const input = document.getElementById("bcFile");
+  const file = input.files[0];
+  const row = document.getElementById("bcMediaTypeRow");
+  if (!file) { row.classList.add("hidden"); return; }
+  if (file.size > BC_MAX_BYTES) {
+    bcNote("That file is over 50 MB. Telegram bots can't send files that large.", "error");
+    input.value = "";
+    row.classList.add("hidden");
+    return;
+  }
+  bcNote("");
+  document.getElementById("bcMediaType").value =
+    file.type.startsWith("image/") ? "photo" : file.type.startsWith("video/") ? "video" : "document";
+  row.classList.remove("hidden");
+});
+
+document.getElementById("bcSendBtn").addEventListener("click", async () => {
+  const btn = document.getElementById("bcSendBtn");
+  const message = document.getElementById("bcMessage").value.trim();
+  const file = document.getElementById("bcFile").files[0];
+  const audience = document.getElementById("bcAudience").value;
+  const mode = document.getElementById("bcMode").value;
+
+  if (!message && !file) { bcNote("Write a message or attach a file.", "error"); return; }
+  if (message.length > (file ? 1024 : 4096)) {
+    bcNote(file ? "With a file attached the message is its caption: 1024 characters at most." : "The message is too long (4096 characters at most).", "error");
+    return;
+  }
+  let when = null;
+  if (mode === "schedule") {
+    const raw = document.getElementById("bcWhen").value;
+    when = raw ? new Date(raw) : null;
+    if (!when || isNaN(when.getTime())) { bcNote("Pick a date and time.", "error"); return; }
+    if (when.getTime() < Date.now() - 60000) { bcNote("Pick a time in the future.", "error"); return; }
+  }
+
+  btn.disabled = true;
+  try {
+    bcNote("Checking the audience...");
+    const cres = await fetch(`/api/broadcasts/audience-count?audience=${audience}`);
+    const cdata = await cres.json();
+    if (!cres.ok) { bcNote(cdata.error || "Could not count the audience.", "error"); return; }
+    const count = cdata.count;
+    if (!count && mode === "now") { bcNote("Nobody is in that audience.", "error"); return; }
+
+    const question = mode === "now"
+      ? `Send to ${count} members?`
+      : `Send to ${count} members on ${when.toLocaleString()}?\n\n(The audience is checked again at send time.)`;
+    if (!confirm(question)) { bcNote(""); return; }
+
+    const fd = new FormData();
+    fd.append("message", message);
+    fd.append("audience", audience);
+    fd.append("mode", mode);
+    if (when) fd.append("scheduled_at", when.toISOString());
+    if (file) {
+      fd.append("media_type", document.getElementById("bcMediaType").value);
+      fd.append("file", file);
+      bcNote("Uploading...");
+    }
+    const res = await fetch("/api/broadcasts", { method: "POST", body: fd });
+    let data = {};
+    try { data = await res.json(); } catch (e) { /* ignore */ }
+    if (!res.ok) { bcNote(data.error || "Could not queue the broadcast.", "error"); return; }
+
+    document.getElementById("bcMessage").value = "";
+    document.getElementById("bcFile").value = "";
+    document.getElementById("bcMediaTypeRow").classList.add("hidden");
+    bcNote(mode === "now" ? "Queued. The bot sends it within a minute." : "Scheduled.", "ok");
+    bcLoadList();
+  } catch (e) {
+    bcNote("Something went wrong. Please try again.", "error");
+  } finally {
+    btn.disabled = false;
+  }
+});

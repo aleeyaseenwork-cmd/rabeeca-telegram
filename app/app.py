@@ -142,6 +142,9 @@ def api_subscribers():
     page_size = int(request.args.get("page_size", 30))
 
     result = dal.get_subscribers(status, pay_status, search, page, page_size)
+    banned_ids = {str(b["telegram_user_id"]) for b in dal.get_bans()}
+    for row in result["rows"]:
+        row["banned"] = str(row.get("telegram_user_id")) in banned_ids
     return jsonify({
         "rows": result["rows"],
         "total": result["total"],
@@ -341,7 +344,14 @@ def api_ban_user():
     if not tg_id.lstrip("-").isdigit():
         return jsonify({"error": "Telegram ID must be a number"}), 400
 
+    already_banned = dal.is_banned(tg_id)
     dal.ban_user(tg_id, data.get("reason", ""))
+
+    # Tell them BEFORE any kick. If the DM fails (bot blocked, never started, ...) we
+    # just carry on, the ban always completes. Re-banning someone already banned
+    # doesn't message them again.
+    if not already_banned:
+        _send_dm(tg_id, "🚫 You have been banned and your access has been removed.")
 
     existing = dal.get_subscriber_by_telegram_id(tg_id)
     if existing:
@@ -354,8 +364,21 @@ def api_ban_user():
 @app.route("/api/bans/<telegram_user_id>", methods=["DELETE"])
 @login_required
 def api_unban_user(telegram_user_id):
+    """Unbans. If the member still has time left on their plan (or lifetime), their
+    status goes back to 'active' and they get a Telegram message with their expiry
+    date and a fresh invite link. An already-expired plan is just unbanned.
+    auto_renew is deliberately left alone."""
+    was_banned = dal.is_banned(telegram_user_id)
     dal.unban_user(telegram_user_id)
-    return jsonify({"ok": True})
+
+    restored = notified = False
+    sub = dal.get_subscriber_by_telegram_id(telegram_user_id) if was_banned else None
+    if sub and _has_time_left(sub):
+        dal.update_subscriber(sub["id"], {"status": "active"})
+        restored = True
+        notified, link_sent = _notify_unbanned(sub)
+        dal.update_subscriber(sub["id"], {"link_sent": 1 if link_sent else 0})
+    return jsonify({"ok": True, "restored": restored, "notified": notified})
 
 
 # --------------------------------------------------- api: revenue range --
@@ -667,6 +690,216 @@ def _notify_and_invite(telegram_user_id):
     except Exception as e:
         app.logger.warning("Could not send invite to %s: %s", telegram_user_id, e)
         return False
+
+
+def _send_dm(telegram_user_id, text):
+    """Best-effort plain-text DM through the bot. Never raises; True if Telegram accepted it."""
+    if not BOT_TOKEN:
+        return False
+    try:
+        import asyncio
+        from telegram import Bot
+
+        async def _send():
+            await Bot(token=BOT_TOKEN).send_message(chat_id=int(telegram_user_id), text=text)
+
+        asyncio.run(_send())
+        return True
+    except Exception as e:
+        app.logger.warning("Could not DM %s: %s", telegram_user_id, e)
+        return False
+
+
+def _has_time_left(sub):
+    """True if the plan hasn't expired yet. Lifetime plans expire in 2126, so they count."""
+    from datetime import datetime
+    return bool(sub.get("expiry_date")) and sub["expiry_date"] > datetime.utcnow().isoformat()
+
+
+def _expiry_label(sub):
+    expiry = sub.get("expiry_date") or ""
+    return "lifetime" if expiry[:4] >= "2100" else expiry[:10]
+
+
+def _notify_unbanned(sub):
+    """DMs an unbanned member their expiry date plus a fresh one-time invite link.
+    Returns (message_delivered, invite_link_included). If the invite link can't be
+    created (no group configured / bot not admin) the message still goes out without it."""
+    if not BOT_TOKEN:
+        return False, False
+    plan = sub.get("button_text") or "subscription"
+    if _expiry_label(sub) == "lifetime":
+        status_line = f"Your {plan} plan is active (lifetime access)."
+    else:
+        status_line = f"Your {plan} plan is active until {_expiry_label(sub)}."
+    try:
+        import asyncio
+        from telegram import Bot
+
+        async def _send():
+            bot = Bot(token=BOT_TOKEN)
+            link = None
+            if _group_chat_id():
+                try:
+                    invite = await bot.create_chat_invite_link(chat_id=_group_chat_id(), member_limit=1)
+                    link = invite.invite_link
+                except Exception as e:
+                    app.logger.warning("Could not create invite for unbanned %s: %s", sub["telegram_user_id"], e)
+            text = f"✅ You have been unbanned.\n\n{status_line}"
+            if link:
+                text += f"\n\n🎉 Tap below to rejoin:\n{link}"
+            await bot.send_message(chat_id=int(sub["telegram_user_id"]), text=text)
+            return link is not None
+
+        return True, asyncio.run(_send())
+    except Exception as e:
+        app.logger.warning("Could not notify unbanned %s: %s", sub.get("telegram_user_id"), e)
+        return False, False
+
+
+# ---------------------------------------------------------- api: broadcast --
+# The dashboard only QUEUES broadcasts here. The bot's job queue (bot/bot.py,
+# process_broadcasts, every 60 s) does the actual sending, never this web request.
+
+BROADCAST_AUDIENCES = ("active", "expired", "all")
+BROADCAST_MEDIA_TYPES = ("photo", "video", "document")
+BROADCAST_MAX_BYTES = 50 * 1024 * 1024          # Telegram bot upload limit
+BROADCAST_PHOTO_MAX_BYTES = 10 * 1024 * 1024    # Telegram limit for sendPhoto
+BROADCAST_TEXT_MAX = 4096
+BROADCAST_CAPTION_MAX = 1024                    # caption limit when media is attached
+
+
+def _broadcast_media_path(media_file):
+    return os.path.join(dal.BROADCAST_MEDIA_DIR, os.path.basename(media_file or ""))
+
+
+def _delete_broadcast_media(broadcast):
+    if broadcast and broadcast.get("media_file"):
+        try:
+            os.remove(_broadcast_media_path(broadcast["media_file"]))
+        except OSError:
+            pass
+
+
+@app.route("/api/broadcasts/audience-count")
+@login_required
+def api_broadcast_audience_count():
+    audience = request.args.get("audience", "")
+    if audience not in BROADCAST_AUDIENCES:
+        return jsonify({"error": "Pick an audience"}), 400
+    return jsonify({"count": len(dal.get_broadcast_recipients(audience))})
+
+
+@app.route("/api/broadcasts", methods=["GET"])
+@login_required
+def api_list_broadcasts():
+    rows = dal.get_broadcasts(30)
+    for r in rows:
+        r.pop("media_file", None)   # internal storage name, not for the browser
+    return jsonify(rows)
+
+
+@app.route("/api/broadcasts", methods=["POST"])
+@login_required
+def api_create_broadcast():
+    from datetime import datetime, timezone
+    import uuid
+    from werkzeug.utils import secure_filename
+
+    # refuse obviously oversized uploads before reading the body
+    if (request.content_length or 0) > BROADCAST_MAX_BYTES + 2 * 1024 * 1024:
+        return jsonify({"error": "File is too large (max 50 MB)"}), 413
+
+    message = (request.form.get("message") or "").strip()
+    audience = request.form.get("audience", "")
+    mode = request.form.get("mode", "now")
+    media_type = request.form.get("media_type", "")
+    upload = request.files.get("file")
+    has_media = bool(upload and upload.filename)
+
+    if audience not in BROADCAST_AUDIENCES:
+        return jsonify({"error": "Pick an audience"}), 400
+    if mode not in ("now", "schedule"):
+        return jsonify({"error": "Invalid send mode"}), 400
+    if not message and not has_media:
+        return jsonify({"error": "Write a message or attach a file"}), 400
+    if has_media and media_type not in BROADCAST_MEDIA_TYPES:
+        return jsonify({"error": "Pick how to send the file (photo, video or document)"}), 400
+    if has_media and len(message) > BROADCAST_CAPTION_MAX:
+        return jsonify({"error": f"With a file attached the message is its caption: max {BROADCAST_CAPTION_MAX} characters"}), 400
+    if len(message) > BROADCAST_TEXT_MAX:
+        return jsonify({"error": f"Message is too long (max {BROADCAST_TEXT_MAX} characters)"}), 400
+
+    now = datetime.utcnow()
+    if mode == "schedule":
+        raw = (request.form.get("scheduled_at") or "").strip()
+        try:
+            when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return jsonify({"error": "Pick a valid date and time"}), 400
+        if when.tzinfo:
+            when = when.astimezone(timezone.utc).replace(tzinfo=None)
+        if (now - when).total_seconds() > 60:
+            return jsonify({"error": "Pick a time in the future"}), 400
+        scheduled_at = when.isoformat()
+    else:
+        if not dal.get_broadcast_recipients(audience):
+            return jsonify({"error": "There is nobody in that audience to send to"}), 400
+        scheduled_at = now.isoformat()
+
+    media_file = media_name = None
+    if has_media:
+        os.makedirs(dal.BROADCAST_MEDIA_DIR, exist_ok=True)
+        media_name = secure_filename(upload.filename) or "file"
+        media_file = uuid.uuid4().hex + os.path.splitext(media_name)[1].lower()[:10]
+        path = _broadcast_media_path(media_file)
+        size = 0
+        with open(path, "wb") as out:
+            while True:
+                chunk = upload.stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > BROADCAST_MAX_BYTES:
+                    break
+                out.write(chunk)
+        problem = None
+        if size > BROADCAST_MAX_BYTES:
+            problem = ("File is too large (max 50 MB)", 413)
+        elif size == 0:
+            problem = ("The file is empty", 400)
+        elif media_type == "photo" and size > BROADCAST_PHOTO_MAX_BYTES:
+            problem = ("Photos can be 10 MB at most. Send it as a document instead", 400)
+        if problem:
+            os.remove(path)
+            return jsonify({"error": problem[0]}), problem[1]
+
+    try:
+        new_id = dal.create_broadcast(message, media_type if has_media else None,
+                                      media_file, media_name, audience, scheduled_at)
+    except Exception:
+        if media_file:
+            try:
+                os.remove(_broadcast_media_path(media_file))
+            except OSError:
+                pass
+        raise
+    return jsonify({"ok": True, "id": new_id, "scheduled_at": scheduled_at})
+
+
+@app.route("/api/broadcasts/<broadcast_id>/cancel", methods=["POST"])
+@login_required
+def api_cancel_broadcast(broadcast_id):
+    try:
+        broadcast = dal.get_broadcast(broadcast_id)
+    except ValueError:
+        broadcast = None
+    if not broadcast:
+        return jsonify({"error": "not found"}), 404
+    if not dal.cancel_broadcast(broadcast_id):
+        return jsonify({"error": "It has already started or finished, so it can't be cancelled"}), 409
+    _delete_broadcast_media(broadcast)
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

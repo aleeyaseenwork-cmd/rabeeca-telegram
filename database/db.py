@@ -101,6 +101,26 @@ def init_db():
     """)
 
     c.execute("""
+    CREATE TABLE IF NOT EXISTS broadcasts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_text TEXT,
+        media_type TEXT,
+        media_file TEXT,
+        media_name TEXT,
+        audience TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'scheduled',
+        scheduled_at TEXT NOT NULL,
+        started_at TEXT,
+        finished_at TEXT,
+        total INTEGER DEFAULT 0,
+        sent_count INTEGER DEFAULT 0,
+        failed_count INTEGER DEFAULT 0,
+        error TEXT,
+        created_at TEXT NOT NULL
+    )
+    """)
+
+    c.execute("""
     CREATE TABLE IF NOT EXISTS admins (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         telegram_admin_id TEXT UNIQUE NOT NULL
@@ -565,6 +585,145 @@ def get_payments_for_range(start_date, end_date):
         }
         for r in rows
     ]
+
+
+# ------------------------------------------------------------ broadcasts --
+
+def _now_iso():
+    return datetime.utcnow().isoformat()
+
+
+def _broadcast_dict(row):
+    d = dict(row)
+    d["id"] = str(d["id"])
+    return d
+
+
+def get_broadcast_recipients(audience):
+    """Telegram IDs a broadcast to `audience` would reach right now. Banned users are
+    ALWAYS excluded. active = status 'active' and not past its expiry; expired =
+    everyone who isn't active (status expired/cancelled, or past expiry); all = both."""
+    now = _now_iso()
+    active_sql = "(COALESCE(status,'') = 'active' AND (expiry_date IS NULL OR expiry_date > ?))"
+    query = "SELECT DISTINCT telegram_user_id FROM subscribers WHERE telegram_user_id NOT IN (SELECT telegram_user_id FROM bans)"
+    params = []
+    if audience == "active":
+        query += f" AND {active_sql}"; params.append(now)
+    elif audience == "expired":
+        query += f" AND NOT {active_sql}"; params.append(now)
+    conn = get_conn()
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    # skip placeholder ids (e.g. "unknown") that can never be messaged
+    return sorted(r["telegram_user_id"] for r in rows if str(r["telegram_user_id"]).lstrip("-").isdigit())
+
+
+def create_broadcast(message_text, media_type, media_file, media_name, audience, scheduled_at):
+    """scheduled_at: naive-UTC ISO string. Returns the new broadcast id (str)."""
+    conn = get_conn()
+    cur = conn.execute(
+        "INSERT INTO broadcasts (message_text, media_type, media_file, media_name, audience, status, "
+        "scheduled_at, created_at) VALUES (?, ?, ?, ?, ?, 'scheduled', ?, ?)",
+        (message_text or "", media_type, media_file, media_name, audience, scheduled_at, _now_iso()),
+    )
+    conn.commit()
+    new_id = str(cur.lastrowid)
+    conn.close()
+    return new_id
+
+
+def get_broadcast(broadcast_id):
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM broadcasts WHERE id = ?", (int(broadcast_id),)).fetchone()
+    conn.close()
+    return _broadcast_dict(row) if row else None
+
+
+def get_broadcasts(limit=30):
+    """Newest first."""
+    conn = get_conn()
+    rows = conn.execute("SELECT * FROM broadcasts ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+    conn.close()
+    return [_broadcast_dict(r) for r in rows]
+
+
+def cancel_broadcast(broadcast_id):
+    """Cancels ONLY a still-scheduled broadcast. Atomic, so it can't race the bot
+    picking it up: exactly one of cancel / claim wins. Returns True if cancelled."""
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE broadcasts SET status='cancelled', finished_at=? WHERE id=? AND status='scheduled'",
+        (_now_iso(), int(broadcast_id)),
+    )
+    conn.commit()
+    ok = cur.rowcount == 1
+    conn.close()
+    return ok
+
+
+def claim_due_broadcast():
+    """Bot-side: atomically takes the oldest due scheduled broadcast and flips it to
+    'sending', so the same broadcast can never be picked up twice. None if nothing is due."""
+    now = _now_iso()
+    conn = get_conn()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM broadcasts WHERE status='scheduled' AND scheduled_at <= ? "
+            "ORDER BY scheduled_at, id LIMIT 1", (now,),
+        ).fetchone()
+        if not row:
+            conn.rollback()
+            return None
+        cur = conn.execute(
+            "UPDATE broadcasts SET status='sending', started_at=? WHERE id=? AND status='scheduled'",
+            (now, row["id"]),
+        )
+        conn.commit()
+        if cur.rowcount != 1:
+            return None
+        d = _broadcast_dict(row)
+        d["status"] = "sending"
+        d["started_at"] = now
+        return d
+    finally:
+        conn.close()
+
+
+def update_broadcast_progress(broadcast_id, sent, failed, total=None):
+    conn = get_conn()
+    if total is None:
+        conn.execute("UPDATE broadcasts SET sent_count=?, failed_count=? WHERE id=?", (sent, failed, int(broadcast_id)))
+    else:
+        conn.execute("UPDATE broadcasts SET sent_count=?, failed_count=?, total=? WHERE id=?",
+                     (sent, failed, total, int(broadcast_id)))
+    conn.commit()
+    conn.close()
+
+
+def finish_broadcast(broadcast_id, status, sent, failed, error=None):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE broadcasts SET status=?, sent_count=?, failed_count=?, error=?, finished_at=? WHERE id=?",
+        (status, sent, failed, error, _now_iso(), int(broadcast_id)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def interrupt_stuck_broadcasts():
+    """Bot startup: anything still 'sending' belongs to a run that died. Mark it
+    'interrupted' instead of resuming, so it can never go out a second time."""
+    conn = get_conn()
+    cur = conn.execute(
+        "UPDATE broadcasts SET status='interrupted', finished_at=?, "
+        "error='Bot restarted while this was sending; it was not resumed.' WHERE status='sending'",
+        (_now_iso(),),
+    )
+    conn.commit()
+    n = cur.rowcount
+    conn.close()
+    return n
 
 
 def get_dev_table(table_name):

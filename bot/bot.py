@@ -15,11 +15,15 @@ import os
 import sys
 import hashlib
 import logging
+import asyncio
+import math
+from datetime import datetime
 from urllib.parse import urlencode
 
 import stripe
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram.error import BadRequest, Forbidden, RetryAfter
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, ContextTypes
 )
@@ -98,8 +102,101 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Here's what I can do:\n\n"
         "/start - See the available plans and subscribe\n"
+        "/status - Check your plan, expiry date and renewal\n"
+        "/renew - Renew or add more time to your plan\n"
         "/cancel - Cancel your subscription's auto-renewal (you keep access until it ends)\n"
         "/help - Show this list of commands"
+    )
+
+
+def _plan_timing(sub):
+    """(expiry datetime or None, is_lifetime, is_active_now) for a subscriber row."""
+    try:
+        expiry = datetime.fromisoformat(sub.get("expiry_date") or "")
+    except ValueError:
+        return None, False, False
+    lifetime = expiry.year >= 2100
+    active = sub.get("status") == "active" and expiry > datetime.utcnow()
+    return expiry, lifetime, active
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if dal.is_banned(user.id):
+        await update.message.reply_text(BANNED_TEXT)
+        return
+
+    sub = dal.get_subscriber_by_telegram_id(user.id)
+    expiry, lifetime, active = _plan_timing(sub) if sub else (None, False, False)
+    if not sub or not expiry:
+        await update.message.reply_text(
+            "ℹ️ You don't have a subscription yet. Send /start to see the plans."
+        )
+        return
+
+    lines = [f"📋 Plan: {sub.get('button_text') or 'Subscription'}"]
+    if active:
+        lines.append("Status: ✅ Active")
+        if lifetime:
+            lines.append("Expires: never (lifetime access)")
+            lines.append("Days left: unlimited")
+            lines.append("Renewal: ♾️ One-time, lifetime access")
+        else:
+            days_left = max(1, math.ceil((expiry - datetime.utcnow()).total_seconds() / 86400))
+            lines.append(f"Expires: {expiry.date().isoformat()}")
+            lines.append(f"Days left: {days_left}")
+            if sub.get("cancelled"):
+                lines.append(f"Renewal: 🛑 Cancelled, it won't renew and access ends on {expiry.date().isoformat()}")
+            elif sub.get("auto_renew"):
+                lines.append("Renewal: 🔁 Auto-renews")
+            else:
+                lines.append("Renewal: 1️⃣ One-time, it doesn't renew automatically")
+    else:
+        lines.append("Status: ❌ Expired")
+        lines.append(f"Ended: {expiry.date().isoformat()}")
+        lines.append("\nSend /renew to get access again.")
+
+    await update.message.reply_text("\n".join(lines))
+
+
+async def renew_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if dal.is_banned(user.id):
+        await update.message.reply_text(BANNED_TEXT)
+        return
+
+    panel = dal.get_active_panel()
+    if not panel:
+        await update.message.reply_text(
+            "🚧 No plans are live right now — check back soon!"
+        )
+        return
+
+    sub = dal.get_subscriber_by_telegram_id(user.id)
+    expiry, lifetime, active = _plan_timing(sub) if sub else (None, False, False)
+    if active and lifetime:
+        await update.message.reply_text("♾️ You already have lifetime access, so there's nothing to renew.")
+        return
+    if active:
+        note = f"⏳ Buying now adds time on top of your current end date (*{expiry.date().isoformat()}*)."
+        if sub.get("auto_renew") and not sub.get("cancelled"):
+            note += "\n\nYou're already on auto-renew, so only buy if you want extra time on top."
+    elif expiry:
+        note = "⏳ Your plan has ended, so buying now starts a fresh period from today."
+    else:
+        note = "👇 Pick a plan to get started."
+
+    buttons = panel["buttons"]
+    keyboard = [
+        [InlineKeyboardButton(f"💎 {b['text']}", callback_data=f"buy:{i}")]
+        for i, b in enumerate(buttons)
+    ]
+    context.user_data["panel_buttons"] = buttons  # cache for callback lookup
+
+    await update.message.reply_text(
+        f"🔁 *{panel['name']}*\n\n{panel['message_text']}\n\n{note}\n\n👇 Pick a plan:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
     )
 
 
@@ -435,20 +532,169 @@ async def send_reminders_and_kick(context: ContextTypes.DEFAULT_TYPE):
                 log.warning("Could not remove user %s: %s", sub["telegram_user_id"], e)
 
 
+# ------------------------------------------------------------- broadcasts --
+# The dashboard only queues broadcasts in the database. This job, run every 60 s,
+# is the ONLY thing that sends them.
+
+BROADCAST_SEND_DELAY = 0.05      # seconds between messages (~20/s, Telegram allows ~30/s)
+BROADCAST_PROGRESS_EVERY = 25    # write sent/failed counts to the DB every N recipients
+_broadcast_lock = asyncio.Lock() # one broadcast tick at a time
+
+# BadRequest messages that mean "this recipient is unreachable", not "the media is bad"
+_RECIPIENT_BAD_REQUESTS = ("chat not found", "user not found", "peer_id_invalid", "user is deactivated")
+
+
+def _broadcast_media_path(b):
+    return os.path.join(dal.BROADCAST_MEDIA_DIR, os.path.basename(b.get("media_file") or ""))
+
+
+def _delete_broadcast_media(b):
+    if b.get("media_file"):
+        try:
+            os.remove(_broadcast_media_path(b))
+        except OSError:
+            pass
+
+
+async def _broadcast_send_one(bot, chat_id, text, media_type, media_path, state):
+    """Sends one broadcast message. Returns ("ok"|"failed"|"abort", error_text).
+    "failed" includes blocked users. "abort" = the media itself was rejected, so
+    there is no point trying everyone else. The file is uploaded once; after that
+    its Telegram file_id is reused for every other recipient."""
+    for _ in range(3):
+        try:
+            if not media_type:
+                await bot.send_message(chat_id=chat_id, text=text)
+            else:
+                send = {"photo": bot.send_photo, "video": bot.send_video, "document": bot.send_document}[media_type]
+                if state["file_id"]:
+                    await send(chat_id=chat_id, caption=text or None, **{media_type: state["file_id"]})
+                else:
+                    with open(media_path, "rb") as fh:
+                        msg = await send(chat_id=chat_id, caption=text or None, **{media_type: fh},
+                                         read_timeout=300, write_timeout=300)
+                    if media_type == "photo":
+                        state["file_id"] = msg.photo[-1].file_id
+                    else:
+                        state["file_id"] = getattr(msg, media_type).file_id
+            return "ok", None
+        except RetryAfter as e:
+            wait = e.retry_after.total_seconds() if hasattr(e.retry_after, "total_seconds") else e.retry_after
+            await asyncio.sleep(float(wait) + 1)      # Telegram did NOT send it, safe to retry
+        except Forbidden as e:
+            return "failed", str(e)                    # user blocked the bot / deactivated
+        except BadRequest as e:
+            msg_l = str(e).lower()
+            if media_type and not state["file_id"] and not any(k in msg_l for k in _RECIPIENT_BAD_REQUESTS):
+                return "abort", f"Telegram rejected the media: {e}"
+            return "failed", str(e)
+        except Exception as e:                         # timeouts etc: NOT retried, it may have been delivered
+            return "failed", str(e)
+    return "failed", "Telegram kept asking to slow down"
+
+
+async def _run_broadcast(bot, b):
+    bid = b["id"]
+    sent = failed = 0
+    try:
+        recipients = dal.get_broadcast_recipients(b["audience"])   # banned users already excluded
+        dal.update_broadcast_progress(bid, 0, 0, total=len(recipients))
+        text = b.get("message_text") or ""
+        media_type = b.get("media_type") or None
+        media_path = _broadcast_media_path(b) if media_type else None
+        if media_type and not os.path.isfile(media_path):
+            dal.finish_broadcast(bid, "failed", 0, 0,
+                                 "The media file wasn't found on the bot's server (the dashboard and bot must share BROADCAST_MEDIA_DIR).")
+            return
+
+        state = {"file_id": None}
+        status, error = "sent", None
+        for i, uid in enumerate(recipients, 1):
+            result, err = await _broadcast_send_one(bot, int(uid), text, media_type, media_path, state)
+            if result == "ok":
+                sent += 1
+            elif result == "abort":
+                status, error = "failed", err
+                break
+            else:
+                failed += 1      # includes users who blocked the bot
+            if i % BROADCAST_PROGRESS_EVERY == 0:
+                dal.update_broadcast_progress(bid, sent, failed)
+            await asyncio.sleep(BROADCAST_SEND_DELAY)
+
+        dal.finish_broadcast(bid, status, sent, failed, error)
+    except Exception as e:
+        log.exception("Broadcast %s crashed", bid)
+        dal.finish_broadcast(bid, "failed", sent, failed, f"Unexpected error: {e}"[:300])
+    finally:
+        _delete_broadcast_media(b)
+
+
+async def process_broadcasts(context: ContextTypes.DEFAULT_TYPE):
+    """Every 60 s: send every broadcast that is due. dal.claim_due_broadcast() is atomic,
+    so a broadcast can never be picked up (and therefore sent) twice."""
+    if _broadcast_lock.locked():
+        return   # a previous tick is still sending
+    async with _broadcast_lock:
+        while True:
+            b = dal.claim_due_broadcast()
+            if not b:
+                break
+            log.info("Sending broadcast %s (audience=%s)", b["id"], b["audience"])
+            await _run_broadcast(context.bot, b)
+
+
+def _recover_stuck_broadcasts():
+    """Startup: a broadcast still marked 'sending' died with the previous run. Mark it
+    'interrupted' (never resume it, that could double-send) and drop its media file."""
+    try:
+        for b in dal.get_broadcasts(100):
+            if b.get("status") == "sending":
+                _delete_broadcast_media(b)
+        n = dal.interrupt_stuck_broadcasts()
+        if n:
+            log.warning("%s broadcast(s) were interrupted by the last shutdown", n)
+    except Exception as e:
+        log.warning("Could not check for interrupted broadcasts: %s", e)
+
+
+BOT_COMMANDS = [
+    ("start", "See the plans and subscribe"),
+    ("status", "Check your plan, expiry date and renewal"),
+    ("renew", "Renew or add more time to your plan"),
+    ("cancel", "Cancel auto-renewal"),
+    ("help", "Show all commands"),
+]
+
+
+async def _post_init(application):
+    """Fills the '/' command menu in Telegram."""
+    try:
+        await application.bot.set_my_commands([BotCommand(c, d) for c, d in BOT_COMMANDS])
+    except Exception as e:
+        log.warning("Could not set the command menu: %s", e)
+
+
 def main():
     if not BOT_TOKEN:
         print("BOT_TOKEN is missing from .env — see README setup steps.")
         return
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = Application.builder().token(BOT_TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("status", status_command))
+    app.add_handler(CommandHandler("renew", renew_command))
     app.add_handler(CallbackQueryHandler(handle_buy, pattern=r"^buy:"))
     app.add_handler(CallbackQueryHandler(handle_pay, pattern=r"^pay:"))
 
     # daily reminder/auto-kick job, runs once every 24h
     app.job_queue.run_repeating(send_reminders_and_kick, interval=24 * 60 * 60, first=10)
+
+    # broadcasts queued from the dashboard: checked every 60 seconds
+    _recover_stuck_broadcasts()
+    app.job_queue.run_repeating(process_broadcasts, interval=60, first=15)
 
     log.info("Bot starting...")
     app.run_polling()

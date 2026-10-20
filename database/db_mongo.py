@@ -13,7 +13,7 @@ import os
 from datetime import datetime, timedelta
 from bson import ObjectId
 from bson.errors import InvalidId
-from pymongo import MongoClient
+from pymongo import MongoClient, ReturnDocument
 
 _client = None
 _db = None
@@ -68,6 +68,7 @@ def init_db():
     db.settings.create_index("key", unique=True)
     db.admins.create_index("telegram_admin_id", unique=True)
     db.bans.create_index("telegram_user_id", unique=True)
+    db.broadcasts.create_index("status")
 
     try:
         _dedupe_subscribers(db)
@@ -476,6 +477,115 @@ def get_payments_for_range(start_date, end_date):
             "provider": p.get("provider") or "",
         })
     return out
+
+
+# ------------------------------------------------------------ broadcasts --
+
+def _now_iso():
+    return datetime.utcnow().isoformat()
+
+
+def _broadcast_dict(doc):
+    d = dict(doc)
+    d["id"] = str(d.pop("_id"))
+    return d
+
+
+def get_broadcast_recipients(audience):
+    """Telegram IDs a broadcast to `audience` would reach right now. Banned users are
+    ALWAYS excluded. active = status 'active' and not past its expiry; expired =
+    everyone who isn't active (status expired/cancelled, or past expiry); all = both."""
+    db = _get_db()
+    now = _now_iso()
+    banned = [b["telegram_user_id"] for b in db.bans.find({}, {"telegram_user_id": 1})]
+    active_q = {"status": "active", "$or": [{"expiry_date": None}, {"expiry_date": {"$gt": now}}]}
+    query = {"telegram_user_id": {"$nin": banned}}
+    if audience == "active":
+        query.update(active_q)
+    elif audience == "expired":
+        query["$nor"] = [active_q]
+    ids = {d["telegram_user_id"] for d in db.subscribers.find(query, {"telegram_user_id": 1})}
+    # skip placeholder ids (e.g. "unknown") that can never be messaged
+    return sorted(i for i in ids if str(i).lstrip("-").isdigit())
+
+
+def create_broadcast(message_text, media_type, media_file, media_name, audience, scheduled_at):
+    """scheduled_at: naive-UTC ISO string. Returns the new broadcast id (str)."""
+    db = _get_db()
+    res = db.broadcasts.insert_one({
+        "message_text": message_text or "", "media_type": media_type, "media_file": media_file,
+        "media_name": media_name, "audience": audience, "status": "scheduled",
+        "scheduled_at": scheduled_at, "started_at": None, "finished_at": None,
+        "total": 0, "sent_count": 0, "failed_count": 0, "error": None,
+        "created_at": _now_iso(),
+    })
+    return str(res.inserted_id)
+
+
+def get_broadcast(broadcast_id):
+    db = _get_db()
+    doc = db.broadcasts.find_one({"_id": _oid(broadcast_id)})
+    return _broadcast_dict(doc) if doc else None
+
+
+def get_broadcasts(limit=30):
+    """Newest first."""
+    db = _get_db()
+    return [_broadcast_dict(d) for d in db.broadcasts.find({}).sort("_id", -1).limit(int(limit))]
+
+
+def cancel_broadcast(broadcast_id):
+    """Cancels ONLY a still-scheduled broadcast. Atomic, so it can't race the bot
+    picking it up: exactly one of cancel / claim wins. Returns True if cancelled."""
+    db = _get_db()
+    res = db.broadcasts.update_one(
+        {"_id": _oid(broadcast_id), "status": "scheduled"},
+        {"$set": {"status": "cancelled", "finished_at": _now_iso()}},
+    )
+    return res.modified_count == 1
+
+
+def claim_due_broadcast():
+    """Bot-side: atomically takes the oldest due scheduled broadcast and flips it to
+    'sending', so the same broadcast can never be picked up twice. None if nothing is due."""
+    db = _get_db()
+    now = _now_iso()
+    doc = db.broadcasts.find_one_and_update(
+        {"status": "scheduled", "scheduled_at": {"$lte": now}},
+        {"$set": {"status": "sending", "started_at": now}},
+        sort=[("scheduled_at", 1), ("_id", 1)],
+        return_document=ReturnDocument.AFTER,
+    )
+    return _broadcast_dict(doc) if doc else None
+
+
+def update_broadcast_progress(broadcast_id, sent, failed, total=None):
+    db = _get_db()
+    fields = {"sent_count": sent, "failed_count": failed}
+    if total is not None:
+        fields["total"] = total
+    db.broadcasts.update_one({"_id": _oid(broadcast_id)}, {"$set": fields})
+
+
+def finish_broadcast(broadcast_id, status, sent, failed, error=None):
+    db = _get_db()
+    db.broadcasts.update_one(
+        {"_id": _oid(broadcast_id)},
+        {"$set": {"status": status, "sent_count": sent, "failed_count": failed,
+                  "error": error, "finished_at": _now_iso()}},
+    )
+
+
+def interrupt_stuck_broadcasts():
+    """Bot startup: anything still 'sending' belongs to a run that died. Mark it
+    'interrupted' instead of resuming, so it can never go out a second time."""
+    db = _get_db()
+    res = db.broadcasts.update_many(
+        {"status": "sending"},
+        {"$set": {"status": "interrupted", "finished_at": _now_iso(),
+                  "error": "Bot restarted while this was sending; it was not resumed."}},
+    )
+    return res.modified_count
 
 
 def get_dev_table(table_name):

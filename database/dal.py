@@ -14,6 +14,11 @@ import logging
 
 log = logging.getLogger(__name__)
 
+# Folder where the dashboard drops broadcast media and the bot picks it up. Both run on the
+# same server, so a plain folder works. Override with BROADCAST_MEDIA_DIR in .env if needed.
+BROADCAST_MEDIA_DIR = os.environ.get("BROADCAST_MEDIA_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "broadcast_media")
+
 _BACKEND = os.environ.get("DB_BACKEND", "sqlite").strip().lower()
 
 if _BACKEND == "mongodb":
@@ -47,6 +52,15 @@ ban_user = _impl.ban_user
 unban_user = _impl.unban_user
 get_revenue_for_range = _impl.get_revenue_for_range
 get_payments_for_range = _impl.get_payments_for_range
+get_broadcast_recipients = _impl.get_broadcast_recipients
+create_broadcast = _impl.create_broadcast
+get_broadcast = _impl.get_broadcast
+get_broadcasts = _impl.get_broadcasts
+cancel_broadcast = _impl.cancel_broadcast
+claim_due_broadcast = _impl.claim_due_broadcast
+update_broadcast_progress = _impl.update_broadcast_progress
+finish_broadcast = _impl.finish_broadcast
+interrupt_stuck_broadcasts = _impl.interrupt_stuck_broadcasts
 get_subscriber = _impl.get_subscriber
 get_subscriber_by_telegram_id = _impl.get_subscriber_by_telegram_id
 get_latest_pending_subscriber = _impl.get_latest_pending_subscriber  # back-compat alias

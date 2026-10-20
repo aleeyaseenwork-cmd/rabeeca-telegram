@@ -22,6 +22,7 @@
           <span class="last-updated">Updated <span id="currentDate"></span></span>
           <button class="icon-btn" id="refreshBtn" title="Refresh"><svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
           <button class="icon-btn" id="darkModeBtn" title="Toggle dark mode"></button>
+          <button class="btn-outline" id="broadcastBtn"><svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Broadcast</button>
           <a href="/revenue" class="btn-outline" id="revenueBtn"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Revenue</a>
           <button class="btn-outline" id="exportBtnHeader"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export Data</button>
           <button class="btn-outline" id="importBtnHeader"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Import Data</button>
@@ -218,6 +219,54 @@
       <div class="modal-actions">
         <button id="viewCloseBtn" class="secondary">Close</button>
       </div>
+    </div>
+  </div>
+
+  <!-- Broadcast modal -->
+  <div id="broadcastModal" class="modal hidden">
+    <div class="modal-box wide">
+      <h2>Broadcast</h2>
+      <label>Message</label>
+      <textarea id="bcMessage" rows="5" placeholder="Write your message..."></textarea>
+      <p class="hint">Plain text, up to 4096 characters (1024 if you attach a file, since it becomes the caption).</p>
+
+      <label>Media (optional, max 50 MB)</label>
+      <input type="file" id="bcFile">
+      <div id="bcMediaTypeRow" class="hidden">
+        <label>Send the file as</label>
+        <select id="bcMediaType">
+          <option value="photo">Photo</option>
+          <option value="video">Video</option>
+          <option value="document">Document</option>
+        </select>
+      </div>
+
+      <label>Audience (banned users are never included)</label>
+      <select id="bcAudience">
+        <option value="active">Active members</option>
+        <option value="expired">Expired members</option>
+        <option value="all">All members</option>
+      </select>
+
+      <label>When</label>
+      <select id="bcMode">
+        <option value="now">Send now</option>
+        <option value="schedule">Schedule</option>
+      </select>
+      <div id="bcScheduleRow" class="hidden">
+        <label>Date and time (your local time)</label>
+        <input type="datetime-local" id="bcWhen">
+      </div>
+
+      <p class="hint" id="bcNote"></p>
+      <div class="modal-actions">
+        <button id="bcCloseBtn" class="secondary" type="button">Close</button>
+        <button id="bcSendBtn" type="button">Send now</button>
+      </div>
+
+      <hr class="modal-divider">
+      <h3>Scheduled and recent broadcasts</h3>
+      <div id="bcList"><p class="hint">Loading...</p></div>
     </div>
   </div>
 
