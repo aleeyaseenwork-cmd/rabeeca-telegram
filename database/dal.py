@@ -46,6 +46,7 @@ is_banned = _impl.is_banned
 ban_user = _impl.ban_user
 unban_user = _impl.unban_user
 get_revenue_for_range = _impl.get_revenue_for_range
+get_payments_for_range = _impl.get_payments_for_range
 get_subscriber = _impl.get_subscriber
 get_subscriber_by_telegram_id = _impl.get_subscriber_by_telegram_id
 get_latest_pending_subscriber = _impl.get_latest_pending_subscriber  # back-compat alias

@@ -96,7 +96,7 @@ function renderSubsTable(rows) {
   const tbody = document.getElementById("subsTableBody");
   tbody.innerHTML = "";
   if (rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;color:var(--text-muted)">No subscribers found</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13" style="text-align:center;color:var(--text-muted)">No subscribers found</td></tr>`;
     return;
   }
   rows.forEach(r => {
@@ -111,6 +111,7 @@ function renderSubsTable(rows) {
       <td>
         <input type="checkbox" class="auto-renew-checkbox" ${r.auto_renew ? "checked" : ""} onchange="toggleAutoRenew('${r.id}', this.checked)">
       </td>
+      <td>${r.cancelled ? '<span class="badge cancelled">Yes</span>' : "-"}</td>
       <td class="mono">${r.purchase_count || 0}</td>
       <td>${r.link_sent ? '<span class="link-yes">Yes</span>' : '<span class="link-no">No</span>'}</td>
       <td>${r.last_payment_status ? `<span class="badge ${r.last_payment_status}">${r.last_payment_status}</span>` : "-"}</td>
@@ -119,12 +120,7 @@ function renderSubsTable(rows) {
         <div class="row-actions">
           <button title="View" onclick="viewSubscriber('${r.id}')">${ICON_EYE}</button>
           <button title="Edit" onclick="openEditModal('${r.id}')">${ICON_PENCIL}</button>
-          <button title="More" onclick="toggleRowMenu(event, '${r.id}')">${ICON_DOTS}</button>
-          <div class="row-menu hidden" id="rowMenu-${r.id}">
-            <button onclick="remindOne('${r.id}')">Send reminder now</button>
-            <button onclick="banFromRow('${r.telegram_user_id}')">Ban this user</button>
-            <button class="danger" onclick="deleteSubscriber('${r.id}')">Delete</button>
-          </div>
+          <button title="More" onclick="openRowMenu('${r.id}')">${ICON_DOTS}</button>
         </div>
       </td>
     `;
@@ -136,18 +132,44 @@ const ICON_EYE = '<svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8
 const ICON_PENCIL = '<svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 const ICON_DOTS = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="5" r="1.8" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.8" fill="currentColor" stroke="none"/></svg>';
 
-document.addEventListener("click", (e) => {
-  if (!e.target.closest(".row-actions")) {
-    document.querySelectorAll(".row-menu").forEach(m => m.classList.add("hidden"));
-  }
-});
+// ---------- row actions modal (3-dots) ----------
+let rowMenuSubId = null;
+const rowMenuModal = document.getElementById("rowMenuModal");
 
-function toggleRowMenu(e, id) {
-  e.stopPropagation();
-  const menu = document.getElementById("rowMenu-" + id);
-  document.querySelectorAll(".row-menu").forEach(m => { if (m !== menu) m.classList.add("hidden"); });
-  menu.classList.toggle("hidden");
+function openRowMenu(id) {
+  const r = allSubscriberRows.find(x => x.id === id);
+  if (!r) return;
+  rowMenuSubId = id;
+  document.getElementById("rowMenuWho").textContent =
+    String(r.telegram_user_id) + (r.telegram_username ? " · @" + r.telegram_username : "");
+  rowMenuModal.classList.remove("hidden");
 }
+
+function closeRowMenu() {
+  rowMenuModal.classList.add("hidden");
+  rowMenuSubId = null;
+}
+
+// closes the modal first, then runs the chosen action for that member
+function rowMenuAction(fn) {
+  const r = allSubscriberRows.find(x => x.id === rowMenuSubId);
+  closeRowMenu();
+  if (r) fn(r);
+}
+document.getElementById("rowMenuRemind").addEventListener("click", () => rowMenuAction(r => remindOne(r.id)));
+document.getElementById("rowMenuBan").addEventListener("click", () => rowMenuAction(r => banFromRow(r.telegram_user_id)));
+document.getElementById("rowMenuDelete").addEventListener("click", () => rowMenuAction(r => deleteSubscriber(r.id)));
+document.getElementById("rowMenuCloseBtn").addEventListener("click", closeRowMenu);
+
+// outside click (press AND release on the dark backdrop) and Esc close it too
+let rowMenuPressedBackdrop = false;
+rowMenuModal.addEventListener("mousedown", (e) => { rowMenuPressedBackdrop = (e.target === rowMenuModal); });
+rowMenuModal.addEventListener("click", (e) => {
+  if (e.target === rowMenuModal && rowMenuPressedBackdrop) closeRowMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !rowMenuModal.classList.contains("hidden")) closeRowMenu();
+});
 
 function viewSubscriber(id) {
   const r = allSubscriberRows.find(x => x.id === id);
@@ -160,6 +182,7 @@ function viewSubscriber(id) {
     ["Price", currencySymbol + (r.price || 0).toFixed(2)],
     ["Status", r.status],
     ["Auto-renew", r.auto_renew ? "Yes" : "No"],
+    ["Cancelled", r.cancelled ? "Yes" : "No"],
     ["Purchases", r.purchase_count || 0],
     ["Invite link sent", r.link_sent ? "Yes" : "No"],
     ["Last payment", r.last_payment_status || "-"],
@@ -469,7 +492,22 @@ let editingPanelId = null;
 function openPanelModal() { document.getElementById("panelModal").classList.remove("hidden"); }
 function closePanelModal() { document.getElementById("panelModal").classList.add("hidden"); }
 
-document.getElementById("newPanelBtn").addEventListener("click", () => {
+// Plans saved before the per-plan "auto_renew" flag existed have no such key; the bot
+// treats those as the old global auto_billing_enabled setting, so the editor shows
+// (and, on save, keeps) that same value for them and for newly added rows.
+let autoBillingFallback = true;
+async function refreshAutoBillingFallback() {
+  try {
+    const res = await fetch("/api/settings");
+    if (res.ok) {
+      const s = await res.json();
+      autoBillingFallback = (s.auto_billing_enabled ?? "1") === "1";
+    }
+  } catch (e) { /* keep the last known value */ }
+}
+
+document.getElementById("newPanelBtn").addEventListener("click", async () => {
+  await refreshAutoBillingFallback();
   editingPanelId = null;
   document.getElementById("panelModalTitle").textContent = "New Panel";
   document.getElementById("panelName").value = "New Panel";
@@ -478,7 +516,8 @@ document.getElementById("newPanelBtn").addEventListener("click", () => {
   openPanelModal();
 });
 
-function editPanel(p) {
+async function editPanel(p) {
+  await refreshAutoBillingFallback();
   editingPanelId = p.id;
   document.getElementById("panelModalTitle").textContent = "Edit Panel";
   document.getElementById("panelName").value = p.name;
@@ -490,10 +529,13 @@ function editPanel(p) {
 function renderButtonsEditor(buttons) {
   const editor = document.getElementById("buttonsEditor");
   editor.innerHTML = "";
-  buttons.forEach(b => addButtonRow(b.text, b.price, b.duration_type, b.custom_days));
+  buttons.forEach(b => addButtonRow(b.text, b.price, b.duration_type, b.custom_days, b.auto_renew));
 }
 
-function addButtonRow(text = "", price = 0, duration = "monthly", customDays = null) {
+function addButtonRow(text = "", price = 0, duration = "monthly", customDays = null, autoRenew = undefined) {
+  const autoRenewChecked = (autoRenew === undefined || autoRenew === null)
+    ? autoBillingFallback
+    : (autoRenew === true || autoRenew === 1 || autoRenew === "1" || autoRenew === "true");
   const row = document.createElement("div");
   row.className = "button-row";
   row.innerHTML = `
@@ -510,6 +552,9 @@ function addButtonRow(text = "", price = 0, duration = "monthly", customDays = n
     </select>
     <input type="number" class="btn-custom-days" placeholder="Days" min="1" value="${customDays || 30}" style="width:70px" ${duration === "custom" ? "" : "hidden"}>
     <button type="button" class="remove-btn" onclick="this.parentElement.remove()">✕</button>
+    <label class="btn-autorenew" title="Recurring subscription (weekly, monthly, 3 months, 6 months, yearly). Lifetime and custom-days plans are always a one-off payment.">
+      <input type="checkbox" class="btn-auto-renew" ${autoRenewChecked ? "checked" : ""}> Auto-renew
+    </label>
   `;
   const durationSel = row.querySelector(".btn-duration");
   const daysInput = row.querySelector(".btn-custom-days");
@@ -531,6 +576,7 @@ document.getElementById("panelSaveBtn").addEventListener("click", async () => {
       text: row.querySelector(".btn-text").value.trim(),
       price: parseFloat(row.querySelector(".btn-price").value) || 0,
       duration_type,
+      auto_renew: row.querySelector(".btn-auto-renew").checked,
     };
     if (duration_type === "custom") {
       btn.custom_days = parseInt(row.querySelector(".btn-custom-days").value, 10) || 30;
@@ -645,7 +691,6 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
   loadBotLink();
   document.getElementById("settingReminderDays").value = s.reminder_days_before || 3;
   document.getElementById("settingAutoKick").checked = s.auto_kick_on_expiry === "1";
-  document.getElementById("settingAutoBilling").checked = s.auto_billing_enabled !== "0";
   document.getElementById("settingAdminIds").value = (s.admin_ids || []).join("\n");
   document.getElementById("currentPasswordInput").value = "";
   document.getElementById("newPasswordInput").value = "";
@@ -672,7 +717,6 @@ document.getElementById("settingsSaveBtn").addEventListener("click", async () =>
       group_chat_id: document.getElementById("settingGroupId").value.trim(),
       reminder_days_before: document.getElementById("settingReminderDays").value,
       auto_kick_on_expiry: document.getElementById("settingAutoKick").checked ? "1" : "0",
-      auto_billing_enabled: document.getElementById("settingAutoBilling").checked ? "1" : "0",
       admin_ids,
     }),
   });
@@ -773,8 +817,7 @@ document.getElementById("banAddBtn").addEventListener("click", async () => {
 
 async function banFromRow(telegramId) {
   if (!confirm(`Ban Telegram ID ${telegramId} permanently? This also cancels their subscription.`)) return;
-  const kick = confirm("Also remove them from the group/channel right now?\n\nOK = remove now, Cancel = just ban.");
-  const result = await banUser(telegramId, "Banned from subscriber list", kick);
+  const result = await banUser(telegramId, "Banned from subscriber list", true);
   if (!result.ok) { alert(result.error || "Could not ban."); return; }
   loadSubscribers(); loadStats();
 }

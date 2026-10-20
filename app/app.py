@@ -45,7 +45,7 @@ def _group_chat_id():
 CSV_FIELDS = [
     "id", "telegram_user_id", "telegram_username", "button_text", "duration_type",
     "custom_days", "price", "currency", "status", "auto_renew", "purchase_count", "link_sent",
-    "start_date", "expiry_date", "provider", "last_payment_status",
+    "start_date", "expiry_date", "provider", "last_payment_status", "cancelled",
 ]
 
 
@@ -112,6 +112,12 @@ def api_change_password():
 @login_required
 def dashboard():
     return render_template("dashboard.html", title=dal.get_setting("dashboard_title", "Dashboard"))
+
+
+@app.route("/revenue")
+@login_required
+def revenue_page():
+    return render_template("revenue.html", title=dal.get_setting("dashboard_title", "Dashboard"))
 
 
 # --------------------------------------------------------- api: stats -----
@@ -370,6 +376,7 @@ def api_revenue_range():
         return jsonify({"error": "End date must be on or after the start date"}), 400
 
     result = dal.get_revenue_for_range(start_dt.isoformat(), end_dt.isoformat())
+    result["payments"] = dal.get_payments_for_range(start_dt.isoformat(), end_dt.isoformat())
     result["currency_symbol"] = dal.get_setting("currency_symbol", "$")
     return jsonify(result)
 

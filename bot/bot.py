@@ -90,6 +90,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if dal.is_banned(update.effective_user.id):
+        await update.message.reply_text(BANNED_TEXT)
+        return
+
+    await update.message.reply_text(
+        "Here's what I can do:\n\n"
+        "/start - See the available plans and subscribe\n"
+        "/cancel - Cancel your subscription's auto-renewal (you keep access until it ends)\n"
+        "/help - Show this list of commands"
+    )
+
+
 def get_active_providers():
     raw = dal.get_setting("active_providers", "stripe")
     return [p.strip() for p in raw.split(",") if p.strip()]
@@ -209,23 +222,39 @@ def verotel_signature(signature_key, params):
     return hashlib.sha1(base.encode()).hexdigest()
 
 
+def _plan_auto_renew(plan):
+    """Whether this plan should auto-renew. Uses the plan's own "auto_renew" flag
+    (set per button in the dashboard's panel editor). Plans saved before that flag
+    existed have no such key, so they fall back to the old global
+    auto_billing_enabled setting and keep behaving exactly as before."""
+    value = plan.get("auto_renew")
+    if value is None:
+        return dal.get_setting("auto_billing_enabled", "1") == "1"
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
     """
     Builds the real payment link for the chosen plan. Stripe and
     Verotel/CardBilling (FlexPay) are both fully wired up. CCBill/PayPal
     return a placeholder until you wire up their SDKs the same way.
 
-    The "Auto-rebill subscriptions" dashboard setting controls whether
-    weekly/monthly/quarterly/semiannual/yearly plans actually recur
-    (auto-charge each period) or become a single one-off charge that
-    relies on the reminder job for renewal — same toggle, both providers.
+    Each plan's own "auto_renew" flag (Auto-renew checkbox in the panel
+    editor) controls whether it is a real recurring subscription. That only
+    happens for weekly/monthly/quarterly/semiannual/yearly plans; otherwise
+    (flag off, or a lifetime/custom plan) it is a single one-off charge that
+    simply ends after the purchased duration and relies on the reminder job.
+    Plans without the flag fall back to the global auto_billing_enabled
+    setting (see _plan_auto_renew) — same rule, both providers.
 
     The plan details ride along as metadata/custom fields (nothing is
     written to the database yet) — the matching webhook in app/app.py
     reads that back once payment is confirmed and applies the purchase
     there (new sub, or stacking/renewal onto an existing one).
     """
-    auto_billing = dal.get_setting("auto_billing_enabled", "1") == "1"
+    auto_billing = _plan_auto_renew(plan)
     custom_days = plan.get("custom_days", "") if plan["duration_type"] == "custom" else ""
 
     if provider == "stripe":
@@ -337,6 +366,13 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not sub or sub.get("status") != "active":
         await update.message.reply_text("You don't have an active subscription to cancel.")
         return
+    if sub.get("cancelled"):
+        await update.message.reply_text(
+            "ℹ️ Your subscription is already cancelled — you keep access until "
+            f"*{(sub.get('expiry_date') or '')[:10]}* and won't be charged again.",
+            parse_mode="Markdown",
+        )
+        return
     if not sub.get("auto_renew"):
         await update.message.reply_text(
             "ℹ️ Your plan isn't set to auto-renew, so there's nothing to cancel — "
@@ -347,15 +383,22 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         import asyncio
-        await asyncio.to_thread(_cancel_provider_billing, sub)
+        cancelled_ok = await asyncio.to_thread(_cancel_provider_billing, sub)
     except Exception as e:
         log.error("Provider cancel failed for %s: %s", user.id, e)
+        cancelled_ok = False
+
+    if not cancelled_ok:
+        # False = nothing was actually cancelled at the provider (no provider
+        # subscription id, Verotel sale not found, unsupported provider)
+        log.warning("Provider billing was not cancelled for %s (provider=%s)", user.id, sub.get("provider"))
         await update.message.reply_text(
             "😕 I couldn't cancel that automatically. Please contact support and we'll sort it out."
         )
         return
 
-    dal.update_subscriber(sub["id"], {"auto_renew": 0})
+    # auto_renew stays as-is; "cancelled" is what marks the member as cancelled
+    dal.update_subscriber(sub["id"], {"cancelled": 1})
     await update.message.reply_text(
         "✅ *Auto-renewal cancelled.*\n\n"
         f"You keep full access until *{(sub.get('expiry_date') or '')[:10]}* and won't be charged again.",
@@ -400,6 +443,7 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CallbackQueryHandler(handle_buy, pattern=r"^buy:"))
     app.add_handler(CallbackQueryHandler(handle_pay, pattern=r"^pay:"))
 

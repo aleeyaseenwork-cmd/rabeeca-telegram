@@ -73,6 +73,7 @@ def init_db():
     _add_column_if_missing(conn, "subscribers", "link_sent INTEGER DEFAULT 0")
     _add_column_if_missing(conn, "subscribers", "custom_days INTEGER")
     _add_column_if_missing(conn, "subscribers", "provider_subscription_id TEXT")
+    _add_column_if_missing(conn, "subscribers", "cancelled INTEGER DEFAULT 0")
 
     c.execute("""
     CREATE TABLE IF NOT EXISTS bans (
@@ -296,7 +297,7 @@ def get_subscribers(status="", pay_status="", search="", page=1, page_size=30):
 
 def update_subscriber(sub_id, fields):
     allowed = ["status", "auto_renew", "expiry_date", "telegram_username", "link_sent",
-               "button_text", "duration_type", "price", "purchase_count", "custom_days"]
+               "button_text", "duration_type", "price", "purchase_count", "custom_days", "cancelled"]
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
         return False
@@ -356,10 +357,11 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
             "UPDATE subscribers SET telegram_username=?, button_text=?, duration_type=?, custom_days=?, price=?, "
             "status='active', expiry_date=?, provider=?, provider_subscription_id=COALESCE(?, provider_subscription_id), "
             "auto_renew=CASE WHEN ? IS NOT NULL THEN 1 ELSE auto_renew END, "
+            "cancelled=CASE WHEN ? IS NOT NULL THEN 0 ELSE cancelled END, "
             "purchase_count=purchase_count+1, link_sent=0 "
             "WHERE telegram_user_id=?",
             (telegram_username or "", button_text, duration_type, custom_days, price, new_expiry, provider,
-             provider_subscription_id, provider_subscription_id, str(telegram_user_id)),
+             provider_subscription_id, provider_subscription_id, provider_subscription_id, str(telegram_user_id)),
         )
         sub_id = existing["id"]
     else:
@@ -464,7 +466,8 @@ def get_expiring_subscribers(reminder_days):
     soon = (datetime.utcnow() + timedelta(days=reminder_days)).isoformat()
     conn = get_conn()
     rows = conn.execute(
-        "SELECT * FROM subscribers WHERE status='active' AND auto_renew=0 "
+        "SELECT * FROM subscribers WHERE status='active' "
+        "AND (auto_renew=0 OR COALESCE(cancelled,0)=1) "
         "AND expiry_date <= ? AND expiry_date > ?",
         (soon, datetime.utcnow().isoformat()),
     ).fetchall()
@@ -531,6 +534,37 @@ def get_revenue_for_range(start_date, end_date):
     ).fetchone()
     conn.close()
     return {"revenue": row["total"], "count": row["n"]}
+
+
+def get_payments_for_range(start_date, end_date):
+    """Every successful payment in [start_date, end_date), newest first, with the
+    subscriber's username/plan joined in where it can be found (by subscriber_id,
+    falling back to the Telegram ID). Same date semantics as get_revenue_for_range."""
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT p.id, p.created_at, p.telegram_user_id, p.amount, p.currency, p.provider, "
+        "       s.telegram_username, s.button_text "
+        "FROM payments p "
+        "LEFT JOIN subscribers s ON s.id = COALESCE(p.subscriber_id, "
+        "    (SELECT id FROM subscribers WHERE telegram_user_id = p.telegram_user_id)) "
+        "WHERE p.status='successful' AND p.created_at >= ? AND p.created_at < ? "
+        "ORDER BY p.created_at DESC, p.id DESC",
+        (start_date, end_date),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": str(r["id"]),
+            "created_at": r["created_at"],
+            "telegram_user_id": r["telegram_user_id"],
+            "telegram_username": r["telegram_username"] or "",
+            "plan": r["button_text"] or "",
+            "amount": r["amount"] or 0,
+            "currency": r["currency"] or "USD",
+            "provider": r["provider"] or "",
+        }
+        for r in rows
+    ]
 
 
 def get_dev_table(table_name):

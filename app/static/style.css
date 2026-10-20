@@ -484,3 +484,42 @@ tbody tr:hover { background: var(--surface-alt); }
 /* ---- settings copy field ---- */
 .copy-row { display: flex; gap: 8px; }
 .copy-row input { flex: 1; }
+
+/* ---- row actions modal (3-dots) ---- */
+.rowmenu-box { width: 340px; }
+.rowmenu-box .hint { margin: -4px 0 0; }
+.rowmenu-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.rowmenu-actions button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 11px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text);
+}
+.rowmenu-actions button:hover { background: var(--surface-alt); }
+.rowmenu-actions button.danger { color: var(--failed); }
+
+/* ---- per-plan auto-renew checkbox in the panel editor ---- */
+#buttonsEditor .button-row { flex-wrap: wrap; }
+.button-row .btn-autorenew {
+  flex: 0 0 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.button-row .btn-autorenew input { flex: 0 0 auto; width: auto; margin: 0; }
+
+/* ---- revenue page ---- */
+.revenue-total { margin: 4px 0 14px; }
+.revenue-table { min-width: 760px; }
+.revenue-table td.num, .revenue-table th.num { text-align: right; }

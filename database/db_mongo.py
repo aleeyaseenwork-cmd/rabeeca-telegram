@@ -175,6 +175,7 @@ def get_stats():
 def _serialize_subscriber(db, doc):
     d = dict(doc)
     d["id"] = str(d.pop("_id"))
+    d.setdefault("cancelled", 0)  # documents created before this field existed
     last_payment = db.payments.find_one(
         {"subscriber_id": d["id"]}, sort=[("created_at", -1)]
     )
@@ -228,7 +229,7 @@ def get_latest_pending_subscriber(telegram_user_id):
 
 def update_subscriber(sub_id, fields):
     allowed = ["status", "auto_renew", "expiry_date", "telegram_username", "link_sent",
-               "button_text", "duration_type", "price", "purchase_count", "custom_days"]
+               "button_text", "duration_type", "price", "purchase_count", "custom_days", "cancelled"]
     fields = {k: v for k, v in fields.items() if k in allowed}
     if not fields:
         return False
@@ -290,7 +291,7 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
                     "expiry_date": new_expiry,
                     "provider": provider,
                     "link_sent": 0,
-                    **({"provider_subscription_id": provider_subscription_id, "auto_renew": 1} if provider_subscription_id else {}),
+                    **({"provider_subscription_id": provider_subscription_id, "auto_renew": 1, "cancelled": 0} if provider_subscription_id else {}),
                 },
                 "$inc": {"purchase_count": 1},
             },
@@ -301,7 +302,7 @@ def apply_purchase(telegram_user_id, telegram_username, button_text, duration_ty
             "telegram_user_id": str(telegram_user_id), "telegram_username": telegram_username or "",
             "panel_id": None, "button_text": button_text, "duration_type": duration_type,
             "custom_days": custom_days,
-            "price": price, "currency": "USD", "status": "active", "auto_renew": 1 if provider_subscription_id else 0,
+            "price": price, "currency": "USD", "status": "active", "auto_renew": 1 if provider_subscription_id else 0, "cancelled": 0,
             "provider_subscription_id": provider_subscription_id,
             "start_date": now.isoformat(), "expiry_date": new_expiry, "provider": provider,
             "purchase_count": 1, "link_sent": 0, "created_at": now.isoformat(),
@@ -381,7 +382,9 @@ def get_expiring_subscribers(reminder_days):
     soon = (datetime.utcnow() + timedelta(days=reminder_days)).isoformat()
     now = datetime.utcnow().isoformat()
     docs = db.subscribers.find({
-        "status": "active", "auto_renew": 0,
+        "status": "active",
+        # remind everyone EXCEPT live auto-renewers (auto_renew == 1 and not cancelled)
+        "$or": [{"auto_renew": {"$ne": 1}}, {"cancelled": 1}],
         "expiry_date": {"$lte": soon, "$gt": now},
     })
     return [{**d, "id": str(d["_id"])} for d in docs]
@@ -437,6 +440,42 @@ def get_revenue_for_range(start_date, end_date):
         "created_at": {"$gte": start_date, "$lt": end_date},
     }, {"amount": 1}))
     return {"revenue": sum(d.get("amount") or 0 for d in docs), "count": len(docs)}
+
+
+def get_payments_for_range(start_date, end_date):
+    """Every successful payment in [start_date, end_date), newest first, with the
+    subscriber's username/plan joined in where it can be found (by subscriber_id,
+    falling back to the Telegram ID). Same date semantics as get_revenue_for_range."""
+    db = _get_db()
+    pays = list(db.payments.find({
+        "status": "successful",
+        "created_at": {"$gte": start_date, "$lt": end_date},
+    }).sort("created_at", -1))
+
+    sub_oids = {_oid(p["subscriber_id"]) for p in pays if p.get("subscriber_id")}
+    tg_ids = {str(p["telegram_user_id"]) for p in pays if p.get("telegram_user_id") is not None}
+    by_id, by_tg = {}, {}
+    if sub_oids:
+        for sdoc in db.subscribers.find({"_id": {"$in": list(sub_oids)}}):
+            by_id[str(sdoc["_id"])] = sdoc
+    if tg_ids:
+        for sdoc in db.subscribers.find({"telegram_user_id": {"$in": list(tg_ids)}}):
+            by_tg[str(sdoc["telegram_user_id"])] = sdoc
+
+    out = []
+    for p in pays:
+        sdoc = by_id.get(str(p.get("subscriber_id"))) or by_tg.get(str(p.get("telegram_user_id"))) or {}
+        out.append({
+            "id": str(p["_id"]),
+            "created_at": p.get("created_at"),
+            "telegram_user_id": p.get("telegram_user_id"),
+            "telegram_username": sdoc.get("telegram_username") or "",
+            "plan": sdoc.get("button_text") or "",
+            "amount": p.get("amount") or 0,
+            "currency": p.get("currency") or sdoc.get("currency") or "USD",
+            "provider": p.get("provider") or "",
+        })
+    return out
 
 
 def get_dev_table(table_name):
