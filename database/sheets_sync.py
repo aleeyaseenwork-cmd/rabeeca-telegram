@@ -69,6 +69,11 @@ def _get_spreadsheet():
 
 
 def _get_worksheet(title, headers):
+    # bot 1 keeps the original tab names; bot N mirrors into "<tab> (Bot N)" so the
+    # ids of different bots can never overwrite each other's rows
+    from database import slot
+    if slot.get() != 1:
+        title = f"{title} (Bot {slot.get()})"
     if title in _worksheet_cache:
         return _worksheet_cache[title]
 

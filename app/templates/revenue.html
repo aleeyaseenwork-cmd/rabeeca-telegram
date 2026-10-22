@@ -16,7 +16,7 @@
       <div class="header-row">
         <div>
           <h1>Revenue</h1>
-          <p class="subtitle">Every successful payment in the selected date range</p>
+          <p class="subtitle">Every successful payment in the selected date range{% if bot_label %} <span class="bot-label">&middot; {{ bot_label }}</span>{% endif %}</p>
         </div>
         <div class="header-actions">
           <a href="/" class="btn-outline"><svg viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg> Back to dashboard</a>
@@ -35,6 +35,8 @@
         <button class="btn-outline range-preset" data-preset="this-month" type="button">This month</button>
         <button class="btn-outline range-preset" data-preset="last-month" type="button">Last month</button>
         <button class="btn-outline range-preset" data-preset="last-30" type="button">Last 30 days</button>
+        <button class="btn-outline" id="exportXlsxBtn" type="button" disabled>Export Excel</button>
+        <button class="btn-outline" id="exportPdfBtn" type="button" disabled>Export PDF</button>
       </div>
       <div class="range-result revenue-total" id="rangeResult"></div>
     </div>
@@ -69,6 +71,37 @@
   }
   const fmtLocalDate = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
+  // the range whose table is on screen right now: the export always matches what you see
+  let shownRange = null;
+
+  async function exportShown(format, btn) {
+    if (!shownRange) return;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Preparing...";
+    try {
+      const res = await fetch(`/api/revenue/export?start=${shownRange.start}&end=${shownRange.end}&format=${format}`);
+      if (res.status === 401) { window.location.href = "/login"; return; }
+      if (!res.ok) {
+        let msg = "Could not create the file.";
+        try { msg = (await res.json()).error || msg; } catch (e) { /* keep the default */ }
+        document.getElementById("rangeResult").textContent = msg;
+        return;
+      }
+      const match = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "");
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(await res.blob());
+      a.download = match ? match[1] : `revenue.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    } finally {
+      btn.textContent = label;
+      btn.disabled = !shownRange;
+    }
+  }
+
   async function loadRevenue() {
     const start = document.getElementById("rangeStart").value;
     const end = document.getElementById("rangeEnd").value;
@@ -80,6 +113,10 @@
     if (res.status === 401) { window.location.href = "/login"; return; }
     const data = await res.json();
     if (!res.ok) { out.textContent = data.error || "Could not load revenue."; return; }
+
+    shownRange = { start, end };
+    document.getElementById("exportXlsxBtn").disabled = false;
+    document.getElementById("exportPdfBtn").disabled = false;
 
     const sym = data.currency_symbol || "$";
     out.innerHTML = `<strong>${escapeHtml(sym)}${Number(data.revenue).toFixed(2)}</strong>` +
@@ -117,6 +154,8 @@
   }
 
   document.getElementById("rangeBtn").addEventListener("click", loadRevenue);
+  document.getElementById("exportXlsxBtn").addEventListener("click", (e) => exportShown("xlsx", e.currentTarget));
+  document.getElementById("exportPdfBtn").addEventListener("click", (e) => exportShown("pdf", e.currentTarget));
   document.querySelectorAll(".range-preset").forEach(btn => {
     btn.addEventListener("click", () => setRange(btn.dataset.preset));
   });

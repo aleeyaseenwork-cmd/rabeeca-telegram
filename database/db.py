@@ -12,14 +12,22 @@ import json
 import os
 from datetime import datetime, timedelta
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")
+from database import slot as _slot
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "data.db")   # bot 1 (unchanged)
+
+
+def _db_path():
+    """Bot 1 keeps data.db exactly as before; bot N uses its own data_N.db."""
+    n = _slot.get()
+    return DB_PATH if n == 1 else os.path.join(os.path.dirname(DB_PATH), f"data_{n}.db")
 
 DURATION_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90, "semiannual": 180, "yearly": 365, "onetime": 36500}  # ~100yr for lifetime
 LIFETIME_EXPIRY = (datetime(2126, 1, 1)).isoformat()
 
 
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(_db_path())
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -737,4 +745,4 @@ def get_dev_table(table_name):
 
 if __name__ == "__main__":
     init_db()
-    print("SQLite database initialized at", DB_PATH)
+    print("SQLite database initialized at", _db_path())

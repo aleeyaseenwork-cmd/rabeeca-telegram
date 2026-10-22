@@ -30,12 +30,18 @@ from telegram.ext import (
 
 sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from database import dal
+from database import slot
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+# Which bot this process runs: BOT_SLOT=1 (default) or BOT_SLOT=2 ... Each bot has its own
+# token in .env (BOT_TOKEN_1, BOT_TOKEN_2; plain BOT_TOKEN still works for bot 1) and its own
+# separate database, so two bots never mix plans, members or payments.
+BOT_SLOT = int(os.environ.get("BOT_SLOT", "1") or 1)
+slot.set_default(BOT_SLOT)
+BOT_TOKEN = slot.bot_token(BOT_SLOT)
 GROUP_CHAT_ID_ENV = os.environ.get("GROUP_CHAT_ID", "")
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5000")
@@ -51,7 +57,8 @@ dal.init_db()
 def _group_chat_id():
     """Channel/group the bot manages — set from Settings in the dashboard,
     with the GROUP_CHAT_ID env var only as a fallback."""
-    return (dal.get_setting("group_chat_id", "") or "").strip() or GROUP_CHAT_ID_ENV
+    env_fallback = GROUP_CHAT_ID_ENV if BOT_SLOT == 1 else ""   # the env fallback belongs to bot 1 only
+    return (dal.get_setting("group_chat_id", "") or "").strip() or env_fallback
 
 
 BANNED_TEXT = "🚫 Sorry, you can't use this service."
@@ -379,6 +386,7 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
                     "duration_type": plan["duration_type"],
                     "custom_days": str(custom_days),
                     "price": str(plan["price"]),
+                    "bot_slot": str(BOT_SLOT),   # tells the webhook which bot's database this purchase belongs to
                 },
                 success_url=f"{DASHBOARD_URL}/checkout/success",
                 cancel_url=f"{DASHBOARD_URL}/checkout/cancel",
@@ -400,7 +408,8 @@ def build_checkout_link(telegram_user_id, telegram_username, plan, provider):
                 "priceCurrency": _currency_code(),
                 "version": "3.5",
                 "description": plan["text"][:255],
-                "custom1": str(telegram_user_id),
+                # bot 1 keeps the plain id (as before); other bots prefix their slot: "2:<id>"
+                "custom1": str(telegram_user_id) if BOT_SLOT == 1 else f"{BOT_SLOT}:{telegram_user_id}",
                 "custom2": plan["duration_type"],
                 "custom3": str(custom_days),
                 "type": "subscription" if is_subscription else "purchase",
@@ -677,7 +686,7 @@ async def _post_init(application):
 
 def main():
     if not BOT_TOKEN:
-        print("BOT_TOKEN is missing from .env — see README setup steps.")
+        print(f"{slot.token_env_name(BOT_SLOT)} is missing from .env. Add the bot token there (never in the dashboard) and restart. See README setup steps.")
         return
 
     app = Application.builder().token(BOT_TOKEN).post_init(_post_init).build()

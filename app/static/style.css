@@ -542,3 +542,15 @@ tr.row-banned .link-yes, tr.row-banned .link-no { color: inherit; }
 .bc-side button { padding: 4px 10px; font-size: 12px; }
 #bcNote.bc-error-note { color: var(--failed); }
 #bcNote.bc-ok-note { color: var(--success); }
+
+/* ---- bot switcher + connect-a-channel ---- */
+.bot-select {
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 8px 10px; font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.ch-result { margin-top: 12px; padding: 10px 12px; border-radius: var(--radius-sm); font-size: 13px; line-height: 1.45; overflow-wrap: anywhere; }
+.ch-result .ch-hint { display: block; margin-top: 4px; font-size: 12px; opacity: .85; }
+.ch-result.ch-ok   { background: var(--success-soft);   color: var(--success); }
+.ch-result.ch-warn { background: var(--pending-soft);   color: var(--pending); }
+.ch-result.ch-err  { background: var(--failed-soft);    color: var(--failed); }
+.bot-label { color: var(--accent); font-weight: 600; }

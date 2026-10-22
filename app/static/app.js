@@ -830,40 +830,6 @@ async function banFromRow(telegramId) {
   loadSubscribers(); loadStats();
 }
 
-// ---------- revenue by date range ----------
-function isoDate(d) { return d.toISOString().slice(0, 10); }
-
-async function calcRange() {
-  const start = document.getElementById("rangeStart").value;
-  const end = document.getElementById("rangeEnd").value;
-  const out = document.getElementById("rangeResult");
-  if (!start || !end) { out.textContent = "Pick a start and end date."; return; }
-  const res = await fetch(`/api/stats/revenue-range?start=${start}&end=${end}`);
-  const data = await res.json();
-  if (!res.ok) { out.textContent = data.error; return; }
-  out.innerHTML = `<strong>${data.currency_symbol}${data.revenue.toFixed(2)}</strong>` +
-    `<span class="range-meta">from ${data.count} payment${data.count === 1 ? "" : "s"}, ${start} to ${end}</span>`;
-}
-document.getElementById("rangeBtn").addEventListener("click", calcRange);
-
-document.querySelectorAll(".range-preset").forEach(btn => {
-  btn.addEventListener("click", () => {
-    const now = new Date();
-    let start, end = now;
-    if (btn.dataset.preset === "this-month") start = new Date(now.getFullYear(), now.getMonth(), 1);
-    if (btn.dataset.preset === "last-month") {
-      start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      end = new Date(now.getFullYear(), now.getMonth(), 0);
-    }
-    if (btn.dataset.preset === "last-30") { start = new Date(now); start.setDate(start.getDate() - 30); }
-    // build YYYY-MM-DD from local parts so the timezone can't shift the day
-    const fmt = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    document.getElementById("rangeStart").value = fmt(start);
-    document.getElementById("rangeEnd").value = fmt(end);
-    calcRange();
-  });
-});
-
 // ---------- bot link (for the website) ----------
 async function loadBotLink() {
   const input = document.getElementById("settingBotLink");
@@ -1060,3 +1026,93 @@ document.getElementById("bcSendBtn").addEventListener("click", async () => {
     btn.disabled = false;
   }
 });
+
+
+// ---------- bot switcher (only when more than one bot is configured in .env) ----------
+(async function initBotSwitcher() {
+  try {
+    const res = await fetch("/api/bots");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.bots.length < 2) return;                      // one bot: no switcher, nothing changes
+    const sel = document.getElementById("botSelect");
+    sel.innerHTML = data.bots.map(b =>
+      `<option value="${b.slot}"${b.slot === data.current ? " selected" : ""}>${escapeHtml(b.label)}</option>`).join("");
+    sel.classList.remove("hidden");
+    sel.addEventListener("change", async () => {
+      const r = await fetch("/api/bots/select", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slot: Number(sel.value) }),
+      });
+      if (r.ok) location.reload();                         // every number on the page belongs to that bot
+    });
+  } catch (e) { /* the dashboard still works without the switcher */ }
+})();
+
+// ---------- Connect a channel ----------
+const chModal = document.getElementById("channelModal");
+
+function chShowResult(kind, message, hint) {
+  const box = document.getElementById("chResult");
+  box.className = "ch-result " + (kind === "ok" ? "ch-ok" : kind === "warn" ? "ch-warn" : "ch-err");
+  box.innerHTML = escapeHtml(message) + (hint ? `<span class="ch-hint">${escapeHtml(hint)}</span>` : "");
+}
+
+async function chOpen() {
+  document.getElementById("chResult").className = "ch-result hidden";
+  document.getElementById("chInput").value = "";
+  document.getElementById("chBot").textContent = "";
+  document.getElementById("chCurrent").textContent = "";
+  chModal.classList.remove("hidden");
+  try {
+    const res = await fetch("/api/channel");
+    const d = await res.json();
+    document.getElementById("chBot").textContent = d.bot ? "Bot: " + d.bot : "";
+    document.getElementById("chCurrent").textContent = d.channel_id
+      ? "Currently connected: " + (d.channel_name ? d.channel_name + " (" + d.channel_id + ")" : d.channel_id)
+      : "No channel connected yet.";
+    if (!d.has_token) {
+      chShowResult("err", "No bot token found. Ask the developer to add " + d.token_env + " to the server's .env file.",
+        "The token must go in the .env file, never in the dashboard, for security.");
+    }
+  } catch (e) { /* the Connect button still reports problems */ }
+  document.getElementById("chInput").focus();
+}
+
+function chClose() { chModal.classList.add("hidden"); }
+
+async function chConnect() {
+  const btn = document.getElementById("chConnectBtn");
+  const value = document.getElementById("chInput").value.trim();
+  if (!value) { chShowResult("err", "Paste the channel ID first."); return; }
+  btn.disabled = true;
+  btn.textContent = "Checking...";
+  try {
+    const res = await fetch("/api/channel/connect", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel_id: value }),
+    });
+    const d = await res.json();
+    if (d.ok && d.warning) {
+      chShowResult("warn", d.message, d.warning);
+    } else if (d.ok) {
+      chShowResult("ok", d.message);
+    } else {
+      chShowResult("err", d.message || d.error || "Something went wrong.", d.hint);
+    }
+    if (d.ok) {
+      document.getElementById("chCurrent").textContent =
+        "Currently connected: " + d.channel_name + " (" + d.channel_id + ")";
+    }
+  } catch (e) {
+    chShowResult("err", "Could not reach the dashboard server. Please try again.");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Connect";
+  }
+}
+
+document.getElementById("channelBtn").addEventListener("click", chOpen);
+document.getElementById("chCloseBtn").addEventListener("click", chClose);
+document.getElementById("chConnectBtn").addEventListener("click", chConnect);
+document.getElementById("chInput").addEventListener("keydown", (e) => { if (e.key === "Enter") chConnect(); });

@@ -22,6 +22,8 @@
           <span class="last-updated">Updated <span id="currentDate"></span></span>
           <button class="icon-btn" id="refreshBtn" title="Refresh"><svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
           <button class="icon-btn" id="darkModeBtn" title="Toggle dark mode"></button>
+          <select id="botSelect" class="bot-select hidden" title="Switch bot"></select>
+          <button class="btn-outline" id="channelBtn"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg> Connect a channel</button>
           <button class="btn-outline" id="broadcastBtn"><svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Broadcast</button>
           <a href="/revenue" class="btn-outline" id="revenueBtn"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Revenue</a>
           <button class="btn-outline" id="exportBtnHeader"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export Data</button>
@@ -62,20 +64,6 @@
           <span class="stat-value" id="statExpiringSoon">-</span>
         </div>
       </div>
-    </div>
-
-    <div class="range-card">
-      <div class="range-title">Revenue by date range</div>
-      <div class="range-controls">
-        <input type="date" id="rangeStart">
-        <span class="range-sep">to</span>
-        <input type="date" id="rangeEnd">
-        <button class="btn-outline" id="rangeBtn" type="button">Calculate</button>
-        <button class="btn-outline range-preset" data-preset="this-month" type="button">This month</button>
-        <button class="btn-outline range-preset" data-preset="last-month" type="button">Last month</button>
-        <button class="btn-outline range-preset" data-preset="last-30" type="button">Last 30 days</button>
-      </div>
-      <div class="range-result" id="rangeResult"></div>
     </div>
 
     <nav class="segmented">
@@ -218,6 +206,24 @@
       <div id="viewModalBody" class="view-details"></div>
       <div class="modal-actions">
         <button id="viewCloseBtn" class="secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connect a channel modal -->
+  <div id="channelModal" class="modal hidden">
+    <div class="modal-box">
+      <h2>Connect a channel</h2>
+      <p class="hint" id="chBot"></p>
+      <p class="hint" id="chCurrent"></p>
+      <label>Channel ID</label>
+      <input type="text" id="chInput" placeholder="-1001234567890, 1234567890 or @channelname" autocomplete="off">
+      <p class="hint">1. Add your bot to the channel as an <b>administrator</b> (with "Invite users" and "Ban users").<br>2. Paste the channel ID here (with or without the -100) and press Connect.</p>
+      <p class="hint">The bot token is <b>not</b> entered here. For security it lives only in the server's <b>.env</b> file (BOT_TOKEN_1 for the first bot, BOT_TOKEN_2 for the second), and the developer adds it there.</p>
+      <div id="chResult" class="ch-result hidden"></div>
+      <div class="modal-actions">
+        <button id="chCloseBtn" class="secondary" type="button">Close</button>
+        <button id="chConnectBtn" type="button">Connect</button>
       </div>
     </div>
   </div>

@@ -15,21 +15,27 @@ from bson import ObjectId
 from bson.errors import InvalidId
 from pymongo import MongoClient, ReturnDocument
 
+from database import slot as _slot
+
 _client = None
-_db = None
+_dbs = {}   # one database handle per bot slot
 
 DURATION_DAYS = {"weekly": 7, "monthly": 30, "quarterly": 90, "semiannual": 180, "yearly": 365, "onetime": 36500}
 LIFETIME_EXPIRY = (datetime(2126, 1, 1)).isoformat()
 
 
 def _get_db():
-    global _client, _db
-    if _db is None:
-        uri = os.environ.get("MONGODB_URI", "mongodb://localhost:27017")
-        db_name = os.environ.get("MONGODB_DB_NAME", "telegram_sub_bot")
-        _client = MongoClient(uri)
-        _db = _client[db_name]
-    return _db
+    """Bot 1 uses MONGODB_DB_NAME exactly as before; bot N uses '<MONGODB_DB_NAME>_N'."""
+    global _client
+    n = _slot.get()
+    db = _dbs.get(n)
+    if db is None:
+        if _client is None:
+            _client = MongoClient(os.environ.get("MONGODB_URI", "mongodb://localhost:27017"))
+        base = os.environ.get("MONGODB_DB_NAME", "telegram_sub_bot")
+        db = _client[base if n == 1 else f"{base}_{n}"]
+        _dbs[n] = db
+    return db
 
 
 def _oid(id_str):
